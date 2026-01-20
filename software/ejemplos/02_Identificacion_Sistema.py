@@ -21,7 +21,7 @@ from softbot_interface import SoftBot
 TARGET_PRESSURE = 15.0   # kPa (Amplitud del escalón)
 DURATION = 5.0           # Duración de grabación (segundos)
 SAMPLING_RATE = 0.05     # Periodo de muestreo (20Hz)
-CHAMBER_ID = 1           # 1=A, 2=B
+CHAMBER_ID = 2           # 1=A, 2=B
 
 def main():
     rclpy.init()

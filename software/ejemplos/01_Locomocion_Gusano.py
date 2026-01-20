@@ -23,9 +23,9 @@ def main():
         print("\n🐛 INICIANDO SECUENCIA DE LOCOMOCIÓN (Ctrl+C para parar)")
         
         # Configuración de marcha
-        P_ANCHOR = 20.0  # kPa (Presión para anclar)
-        P_RELEASE = -10.0 # kPa (Presión para liberar)
-        T_STEP = 2.0     # Segundos por fase
+        P_ANCHOR = 30.0  # kPa (Presión para anclar)
+        P_RELEASE = -20.0 # kPa (Presión para liberar)
+        T_STEP = 5.0     # Segundos por fase
 
         cycles = 0
         while True:
