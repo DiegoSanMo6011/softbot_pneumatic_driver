@@ -55,3 +55,25 @@ Para establecer el enlace DDS, ejecute el agente micro-ROS en el computador prin
 
 ```bash
 docker run -it --rm -v /dev:/dev --privileged --net=host microros/micro-ros-agent:humble serial --dev /dev/ttyUSB0 -b 115200
+## 5. Interfaz de Operación (ROS 2 API)
+
+La interacción con el controlador se realiza mediante tópicos estandarizados de ROS 2.
+> **Nota:** Para la activación de cualquier actuador, se debe cumplir la condición lógica: `active_chamber != 0`.
+
+### Tabla de Tópicos y Semántica
+
+| Tópico | Tipo de Mensaje | Descripción Funcional |
+| :--- | :--- | :--- |
+| `/active_chamber` | `std_msgs/Int8` | **Selector de Multiplexor:**<br>`0`: Bloqueo (Idle)<br>`1`: Cámara A<br>`2`: Cámara B<br>`3`: Dual (A+B) |
+| `/pressure_mode` | `std_msgs/Int8` | **Selector de Estrategia:**<br>`1`: PID Inflado<br>`-1`: PID Succión<br>`2`: Lazo Abierto Inflado<br>`-2`: Lazo Abierto Succión |
+| `/pressure_setpoint` | `std_msgs/Float32` | **Referencia de Control:**<br>En PID: Presión Objetivo ($kPa$)<br>En Lazo Abierto: Ciclo de Trabajo PWM ($0.0 - 255.0$) |
+| `/pressure_feedback`| `std_msgs/Float32` | **Variable de Proceso:** Lectura actual del sensor ($kPa$). |
+| `/system_debug` | `std_msgs/Int16MultiArray`| **Vector de Telemetría:**<br>`[PWM_Main, PWM_Aux, Error*100, Modo]` |
+
+### Ejemplo de Comando: Secuencia de Inflado Controlado
+El siguiente comando activa la Cámara A e inicia el algoritmo PID con un objetivo de 15 kPa:
+
+```bash
+ros2 topic pub --once /active_chamber std_msgs/msg/Int8 "{data: 1}" && \
+ros2 topic pub --once /pressure_mode std_msgs/msg/Int8 "{data: 1}" && \
+ros2 topic pub --once /pressure_setpoint std_msgs/msg/Float32 "{data: 15.0}"
