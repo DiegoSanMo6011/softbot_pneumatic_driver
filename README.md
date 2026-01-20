@@ -35,7 +35,7 @@ Implementación de una capa de abstracción que permite la modificación dinámi
 
 ### Modos de Operación Dual
 1.  **Control en Lazo Cerrado (PID):** Regulación automática de la presión interna basada en el error respecto al setpoint:
-    $$e(t) = r(t) - y(t)$$
+    
 2.  **Identificación de Sistemas (Lazo Abierto):** Inyección directa de señales de control (PWM) para caracterización de la planta y obtención de la respuesta al escalón (*Step Response*).
 
 ### Protocolo de Seguridad Activa
