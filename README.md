@@ -44,11 +44,11 @@ El firmware incluye un monitor de estado que ejecuta un **Paro de Emergencia (E-
 ## 4. Protocolo de Despliegue e Instalación
 
 ### 4.1 Firmware (Microcontrolador)
-El código fuente se encuentra estructurado en el directorio `firmware/`.
+El código fuente se encuentra estructurado en el directorio `softbot_controller/`.
 
 * **Entorno requerido:** PlatformIO o Arduino IDE 2.0+.
 * **Dependencias:** `micro_ros_arduino` (v2.0.7-humble).
-* **Procedimiento:** Compilar y cargar `softbot_advanced_controller.ino`.
+* **Procedimiento:** Compilar y cargar `softbot_controller.ino`.
 
 ### 4.2 Agente de Comunicación (Host)
 Para establecer el enlace DDS, ejecute el agente micro-ROS en el computador principal:
