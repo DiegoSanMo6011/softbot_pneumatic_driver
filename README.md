@@ -8,6 +8,19 @@ El presente repositorio alberga la implementación de firmware y software para e
 
 El sistema actúa como un puente de bajo nivel entre la lógica de control de alto nivel (ejecutada en **ROS 2 Humble/Iron**) y la etapa de potencia neumática. El controlador implementa algoritmos PI discretos para la regulación de presión positiva y negativa (vacío), integra protocolos de seguridad por interbloqueo (*safety interlocks*) y provee una interfaz de telemetría en tiempo real para la identificación de sistemas.
 
+## 🎥 Video de Demostración del Software
+
+El siguiente video presenta las **funcionalidades principales del SoftBot Pneumatic Driver**, incluyendo:
+
+- ✔️ Operación en **lazo abierto** (presión y vacío) para experimentación
+- ✔️ **Control PI** en presión positiva y negativa
+- ✔️ **Sintonización dinámica** de ganancias (`Kp`, `Ki`) y límites seguros (`P_max`, `P_min`)
+- ✔️ Activación de **Paro de Emergencia (E-STOP)** en tiempo real
+
+▶️ **Ver video de demostración:**  
+[SoftBot Pneumatic Driver – Functional Demo](media/softbot_demo.webm)
+
+
 ## 2. Especificaciones Técnicas
 
 ### 2.1 Arquitectura del Sistema
