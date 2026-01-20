@@ -10,15 +10,14 @@ El sistema actúa como un puente de bajo nivel entre la lógica de control de al
 
 ## 🎥 Video de Demostración del Software
 
-El siguiente video presenta las **funcionalidades principales del SoftBot Pneumatic Driver**, incluyendo:
+El siguiente video presenta una demostración completa del **SoftBot Pneumatic Driver**, mostrando las principales capacidades del sistema, entre ellas:
 
-- ✔️ Operación en **lazo abierto** (presión y vacío) para experimentación
-- ✔️ **Control PI** en presión positiva y negativa
-- ✔️ **Sintonización dinámica** de ganancias (`Kp`, `Ki`) y límites seguros (`P_max`, `P_min`)
-- ✔️ Activación de **Paro de Emergencia (E-STOP)** en tiempo real
+- Operación en **lazo abierto** tanto en **presión** como en **vacío** para experimentación e identificación de sistemas
+- Control **PI en lazo cerrado** para regulación de presión positiva y negativa
+- **Sintonización dinámica en tiempo real** de las ganancias del controlador (`Kp`, `Ki`) y de los límites de presión segura (`P_max`, `P_min`)
+- Activación inmediata del **Paro de Emergencia (E-STOP)** ante condiciones inseguras
 
-▶️ **Ver video de demostración:**  
-[SoftBot Pneumatic Driver – Functional Demo](media/softbot_demo.webm)
+[![SoftBot Pneumatic Driver – Video de Demostración](https://img.youtube.com/vi/uC6NLilY3fU/0.jpg)](https://youtu.be/uC6NLilY3fU)
 
 
 ## 2. Especificaciones Técnicas
