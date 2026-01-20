@@ -55,6 +55,8 @@ Para establecer el enlace DDS, ejecute el agente micro-ROS en el computador prin
 
 ```bash
 docker run -it --rm -v /dev:/dev --privileged --net=host microros/micro-ros-agent:humble serial --dev /dev/ttyUSB0 -b 115200
+```
+
 ## 5. Interfaz de Operación (ROS 2 API)
 
 La interacción con el controlador se realiza mediante tópicos estandarizados de ROS 2.
@@ -77,3 +79,6 @@ El siguiente comando activa la Cámara A e inicia el algoritmo PID con un objeti
 ros2 topic pub --once /active_chamber std_msgs/msg/Int8 "{data: 1}" && \
 ros2 topic pub --once /pressure_mode std_msgs/msg/Int8 "{data: 1}" && \
 ros2 topic pub --once /pressure_setpoint std_msgs/msg/Float32 "{data: 15.0}"
+```
+
+
