@@ -80,5 +80,15 @@ ros2 topic pub --once /active_chamber std_msgs/msg/Int8 "{data: 1}" && \
 ros2 topic pub --once /pressure_mode std_msgs/msg/Int8 "{data: 1}" && \
 ros2 topic pub --once /pressure_setpoint std_msgs/msg/Float32 "{data: 15.0}"
 ```
+## 6. Configuración Dinámica (Tuning Vectorial)
 
+Para la reconfiguración de parámetros en tiempo de ejecución, se debe publicar el vector de configuración en el tópico `/tuning_params`.
 
+**Estructura del Vector:**
+`[Kp_Pos, Ki_Pos, Kp_Neg, Ki_Neg, Max_Safe, Min_Safe]`
+
+**Ejemplo: Aumentar ganancia proporcional de inflado a 25.0**
+
+```bash
+ros2 topic pub --once /tuning_params std_msgs/msg/Float32MultiArray "{data: [25.0, 300.0, -75.0, -750.0, 45.0, -60.0]}"
+```
