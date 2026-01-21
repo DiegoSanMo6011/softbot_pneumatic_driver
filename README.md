@@ -79,8 +79,8 @@ La interacción con el controlador se realiza mediante tópicos estandarizados d
 | Tópico | Tipo de Mensaje | Descripción Funcional |
 | :--- | :--- | :--- |
 | `/active_chamber` | `std_msgs/Int8` | **Selector de Multiplexor:**<br>`0`: Bloqueo (Idle)<br>`1`: Cámara A<br>`2`: Cámara B<br>`3`: Dual (A+B) |
-| `/pressure_mode` | `std_msgs/Int8` | **Selector de Estrategia:**<br>`1`: PID Inflado<br>`-1`: PID Succión<br>`2`: Lazo Abierto Inflado<br>`-2`: Lazo Abierto Succión |
-| `/pressure_setpoint` | `std_msgs/Float32` | **Referencia de Control:**<br>En PID: Presión Objetivo ($kPa$)<br>En Lazo Abierto: Ciclo de Trabajo PWM ($0.0 - 255.0$) |
+| `/pressure_mode` | `std_msgs/Int8` | **Selector de Estrategia:**<br>`1`: PI Inflado<br>`-1`: PI Succión<br>`2`: Lazo Abierto Inflado<br>`-2`: Lazo Abierto Succión |
+| `/pressure_setpoint` | `std_msgs/Float32` | **Referencia de Control:**<br>En PI: Presión Objetivo ($kPa$)<br>En Lazo Abierto: Ciclo de Trabajo PWM ($0.0 - 255.0$) |
 | `/pressure_feedback`| `std_msgs/Float32` | **Variable de Proceso:** Lectura actual del sensor ($kPa$). |
 | `/system_debug` | `std_msgs/Int16MultiArray`| **Vector de Telemetría:**<br>`[PWM_Main, PWM_Aux, Error*100, Modo]` |
 
