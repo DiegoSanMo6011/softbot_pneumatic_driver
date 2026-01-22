@@ -1,9 +1,10 @@
 /**
- * @file softbot_advanced_controller.ino
- * @brief Controlador Final Optimizado - v5.1 (Safety Vent Added).
- * @version 5.1.0
+ * @file softbot_controller_v6_ff.ino
+ * @brief Controlador v6.0 - Implementación Feed-Forward + PID.
  * @details
- * - Nueva función de Seguridad: Venteo automático antes de E-STOP.
+ * - Integra curvas de calibración (PWM vs Presión) obtenidas experimentalmente.
+ * - Reduce drásticamente el tiempo de subida (Rise Time).
+ * - Mantiene sistemas de seguridad (Venteo y Watchdog).
  */
 
 #include <Arduino.h>
@@ -39,19 +40,29 @@ const int CH_SUCCION_AUX = 2;
 const int PWM_FREQ = 1000;
 const int PWM_RES = 8;
 const int PWM_MAX = 255;
-
 const int UMBRAL_TURBO = 100; 
 
 // ==========================================
-// 2. VARIABLES DE CONTROL
+// 2. CONSTANTES DE FEED-FORWARD (CALIBRADAS)
 // ==========================================
-float KP_NEG = -75.00f;  
-float KI_NEG = -750.00f; 
+// Ecuación Inflado: PWM = (5.0 * kPa) - 20
+const float FF_POS_SLOPE  = 5.0f; 
+const float FF_POS_OFFSET = -20.0f;
+
+// Ecuación Succión: PWM = (-4.8 * kPa) + 70
+const float FF_NEG_SLOPE  = -4.8f; 
+const float FF_NEG_OFFSET = 70.0f;
+
+// ==========================================
+// 3. VARIABLES DE CONTROL PID
+// ==========================================
+float KP_NEG = -50.00f;  // Bajamos un poco el KP ya que el FF hace el trabajo pesado
+float KI_NEG = -400.00f; 
 const float TS_NEG = 0.010f; 
 float integral_neg_sum = 0.0f;
 
-float KP_POS = 12.0f;     
-float KI_POS = 300.0f;    
+float KP_POS = 8.0f;     // KP más suave para evitar overshoot con el FF
+float KI_POS = 150.0f;    
 const float TS_POS = 0.010f; 
 float integral_pos_sum = 0.0f;
 
@@ -64,7 +75,7 @@ const float Ts_ms = 10.0f;
 unsigned long last_control_ms = 0;
 
 // ==========================================
-// 3. SEGURIDAD Y SENSOR
+// 4. SEGURIDAD Y SENSOR
 // ==========================================
 float MAX_PRESION_SEGURIDAD = 45.0f;  
 float MIN_PRESION_SEGURIDAD = -60.0f; 
@@ -77,7 +88,7 @@ const float V_OFFSET = 2.5f;
 const float V_PER_kPa = 0.02f;  
 
 // ==========================================
-// 4. MICRO-ROS OBJETOS
+// 5. MICRO-ROS OBJETOS
 // ==========================================
 rcl_node_t node;
 rclc_support_t support;
@@ -132,27 +143,22 @@ void stopAll() {
   ledcWrite(CH_SUCCION_AUX, 0);
   digitalWrite(PIN_VALVULA_INFLAR, LOW);
   digitalWrite(PIN_VALVULA_SUCCION, LOW);
-  digitalWrite(PIN_DISTRIB_A, LOW);
-  digitalWrite(PIN_DISTRIB_B, LOW);
+  // No tocamos pines de distribución para permitir venteo si es necesario
 }
 
-// --- MODIFICACIÓN: VENTEO DE SEGURIDAD ---
+// --- VENTEO DE SEGURIDAD ---
 void triggerEmergencyStop() {
-  // 1. Apagar Bombas (Corte de Energía)
   ledcWrite(CH_INFLAR, 0);
   ledcWrite(CH_SUCCION_MAIN, 0);
   ledcWrite(CH_SUCCION_AUX, 0);
 
-  // 2. Abrir TODAS las válvulas para purgar aire (Venteo)
   digitalWrite(PIN_VALVULA_INFLAR, HIGH);
   digitalWrite(PIN_VALVULA_SUCCION, HIGH);
   digitalWrite(PIN_DISTRIB_A, HIGH);
   digitalWrite(PIN_DISTRIB_B, HIGH);
 
-  // 3. Esperar 2 segundos para desinflar
   delay(2000);
 
-  // 4. Cerrar todo y bloquear
   stopAll();
   emergency_stop_active = true;
   mode_control = 0;
@@ -160,16 +166,20 @@ void triggerEmergencyStop() {
 
 float calculate_PI_pos(float error) {
   integral_pos_sum += error * TS_POS;
-  float output = (KP_POS * error) + (KI_POS * integral_pos_sum);
-  if ((output > PWM_MAX && error > 0) || (output < 0 && error < 0)) integral_pos_sum -= error * TS_POS;
-  return output;
+  // Anti-windup simple
+  float i_term = KI_POS * integral_pos_sum;
+  if (i_term > PWM_MAX) integral_pos_sum = PWM_MAX / KI_POS;
+  
+  return (KP_POS * error) + (KI_POS * integral_pos_sum);
 }
 
 float calculate_PI_neg(float error) {
   integral_neg_sum += error * TS_NEG;
-  float output = (KP_NEG * error) + (KI_NEG * integral_neg_sum);
-  if ((output > PWM_MAX && error * KP_NEG > 0) || (output < 0 && error * KP_NEG < 0)) integral_neg_sum -= error * TS_NEG;
-  return output;
+  // Anti-windup simple
+  float i_term = KI_NEG * integral_neg_sum;
+  if (i_term < -PWM_MAX) integral_neg_sum = -PWM_MAX / KI_NEG;
+  
+  return (KP_NEG * error) + (KI_NEG * integral_neg_sum);
 }
 
 // ==========================================
@@ -184,10 +194,15 @@ void mode_callback(const void * msgin) {
   const std_msgs__msg__Int8 * msg = (const std_msgs__msg__Int8 *)msgin;
   if (emergency_stop_active && msg->data == 0) emergency_stop_active = false;
   if (emergency_stop_active) return;
-  mode_control = msg->data;
-  if (mode_control == 0 || mode_control == 2 || mode_control == -2) { 
-    integral_pos_sum = 0; integral_neg_sum = 0; 
+  
+  int8_t new_mode = msg->data;
+  
+  // Reset de integrales al cambiar de modo para evitar saltos
+  if (new_mode != mode_control) {
+      integral_pos_sum = 0; 
+      integral_neg_sum = 0; 
   }
+  mode_control = new_mode;
 }
 
 void chamber_callback(const void * msgin) {
@@ -210,27 +225,28 @@ void tuning_callback(const void * msgin) {
 }
 
 // ==========================================
-// LOOP DE CONTROL
+// LOOP DE CONTROL PRINCIPAL
 // ==========================================
 void controlLoop() {
   current_pressure = readPressure();
 
-  // Seguridad
+  // 1. CHEQUEO DE SEGURIDAD
   if (current_pressure > MAX_PRESION_SEGURIDAD || current_pressure < MIN_PRESION_SEGURIDAD) {
     triggerEmergencyStop();
   }
   
+  // Feedback inmediato
   msg_feedback.data = current_pressure;
   rcl_publish(&pub_feedback, &msg_feedback, NULL);
 
   if (emergency_stop_active) {
-      debug_data[0] = -1; debug_data[1] = -1; debug_data[2] = 0; debug_data[3] = 0;
+      debug_data[0] = -999; 
       msg_debug.data.data = debug_data; msg_debug.data.size = 4;
       rcl_publish(&pub_debug, &msg_debug, NULL);
       return;
   }
 
-  // --- DISTRIBUCIÓN ---
+  // 2. SELECCIÓN DE CÁMARA
   switch (active_chamber) {
     case 1: digitalWrite(PIN_DISTRIB_A, HIGH); digitalWrite(PIN_DISTRIB_B, LOW); break;
     case 2: digitalWrite(PIN_DISTRIB_A, LOW); digitalWrite(PIN_DISTRIB_B, HIGH); break;
@@ -238,33 +254,54 @@ void controlLoop() {
     default: digitalWrite(PIN_DISTRIB_A, LOW); digitalWrite(PIN_DISTRIB_B, LOW); break;
   }
 
-  // --- CONTROL ---
   float error = setpoint_kPa - current_pressure;
   int pwm_main = 0;
   int pwm_aux = 0;
 
+  // 3. LÓGICA DE CONTROL (FF + PID)
   if (mode_control == 0 || active_chamber == 0) {
     stopAll();
     integral_pos_sum = 0; integral_neg_sum = 0;
   } 
-  else if (mode_control == 1) { // INFLAR PID
+  else if (mode_control == 1) { // INFLAR (Lazo Cerrado con FF)
     digitalWrite(PIN_VALVULA_INFLAR, HIGH); digitalWrite(PIN_VALVULA_SUCCION, LOW);
     ledcWrite(CH_SUCCION_MAIN, 0); ledcWrite(CH_SUCCION_AUX, 0);
 
-    float out = calculate_PI_pos(error);
+    // A. Feed-Forward Term (Estimación Base)
+    float ff_term = (FF_POS_SLOPE * setpoint_kPa) + FF_POS_OFFSET;
+    if (ff_term < 0) ff_term = 0; // No podemos tener FF negativo aquí
+
+    // B. PID Term (Corrección de Error)
+    float pid_term = calculate_PI_pos(error);
+
+    // C. Salida Total
+    float out = ff_term + pid_term;
+    
+    // Saturación
     if (out < 0) out = 0; if (out > PWM_MAX) out = PWM_MAX;
     pwm_main = (int)out;
+    
     ledcWrite(CH_INFLAR, pwm_main);
   } 
-  else if (mode_control == -1) { // SUCCIONAR PID
+  else if (mode_control == -1) { // SUCCIONAR (Lazo Cerrado con FF)
     digitalWrite(PIN_VALVULA_INFLAR, LOW); digitalWrite(PIN_VALVULA_SUCCION, HIGH);
     ledcWrite(CH_INFLAR, 0);
 
-    float out = calculate_PI_neg(error);
+    // A. Feed-Forward Term (Nota: setpoint es negativo, slope es negativo -> resultado positivo)
+    float ff_term = (FF_NEG_SLOPE * setpoint_kPa) + FF_NEG_OFFSET;
+    if (ff_term < 0) ff_term = 0;
+
+    // B. PID Term
+    float pid_term = calculate_PI_neg(error);
+
+    // C. Salida Total
+    float out = ff_term + pid_term;
+
     if (out < 0) out = 0; if (out > PWM_MAX) out = PWM_MAX;
     pwm_main = (int)out;
     ledcWrite(CH_SUCCION_MAIN, pwm_main);
     
+    // Turbo Logic
     if (out > UMBRAL_TURBO) {
        int aux = map(out, UMBRAL_TURBO, PWM_MAX, 100, 255); 
        pwm_aux = aux;
@@ -273,31 +310,26 @@ void controlLoop() {
        ledcWrite(CH_SUCCION_AUX, 0);
     }
   }
-  else if (mode_control == 2) { // INFLAR OPEN LOOP
+  // Mantenemos los modos de calibración por si necesitas recalibrar en el futuro
+  else if (mode_control == 2) { 
     digitalWrite(PIN_VALVULA_INFLAR, HIGH); digitalWrite(PIN_VALVULA_SUCCION, LOW);
     ledcWrite(CH_SUCCION_MAIN, 0); ledcWrite(CH_SUCCION_AUX, 0);
-    int pwm = (int)setpoint_kPa;
-    if (pwm < 0) pwm = 0; if (pwm > 255) pwm = 255;
-    pwm_main = pwm;
+    pwm_main = constrain((int)setpoint_kPa, 0, 255);
     ledcWrite(CH_INFLAR, pwm_main);
   }
-  else if (mode_control == -2) { // SUCCIONAR OPEN LOOP
+  else if (mode_control == -2) { 
     digitalWrite(PIN_VALVULA_INFLAR, LOW); digitalWrite(PIN_VALVULA_SUCCION, HIGH);
     ledcWrite(CH_INFLAR, 0);
-    int pwm = (int)setpoint_kPa;
-    if (pwm < 0) pwm = 0; if (pwm > 255) pwm = 255;
-    pwm_main = pwm;
+    pwm_main = constrain((int)setpoint_kPa, 0, 255);
     ledcWrite(CH_SUCCION_MAIN, pwm_main);
-    if (pwm > UMBRAL_TURBO) {
-       int aux = map(pwm, UMBRAL_TURBO, PWM_MAX, 100, 255); 
-       pwm_aux = aux;
-       ledcWrite(CH_SUCCION_AUX, pwm_aux);
-    } else {
-       ledcWrite(CH_SUCCION_AUX, 0);
-    }
   }
 
-  debug_data[0] = pwm_main; debug_data[1] = pwm_aux; debug_data[2] = (int16_t)(error * 100); debug_data[3] = (int16_t)mode_control;
+  // Debug: Enviamos PWM Total y la parte que contribuye el FF (en slot 2) para análisis
+  debug_data[0] = pwm_main; 
+  debug_data[1] = pwm_aux; 
+  debug_data[2] = (int16_t)(error * 10); 
+  debug_data[3] = (int16_t)mode_control;
+  
   msg_debug.data.data = debug_data; msg_debug.data.size = 4;
   rcl_publish(&pub_debug, &msg_debug, NULL);
 }

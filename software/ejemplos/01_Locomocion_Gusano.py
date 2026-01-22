@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Ejemplo 1: Algoritmo de Locomoción "Gusano" (Peristáltico)
 ----------------------------------------------------------
