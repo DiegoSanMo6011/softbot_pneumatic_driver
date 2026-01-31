@@ -22,16 +22,21 @@ La librería utiliza exclusivamente módulos estándar de **ROS 2** (`rclpy`).
 
 ## 📁 Estructura del Directorio
 software/
-├── softbot_interface.py
+├── sdk/
+│   ├── __init__.py
+│   └── softbot_interface.py
 └── ejemplos/
-    ├── 01_locomocion_gusano.py
-    ├── 02_identificacion_sistema.py
-    └── 03_configurar_seguridad.py
+    ├── 01_Locomocion_Gusano.py
+    ├── 02_Identificacion_Sistema.py
+    └── 03_Configurar_Seguridad.py
 ### Descripción de Archivos
 
-- **`softbot_interface.py`**  
+- **`sdk/softbot_interface.py`**  
   Librería principal.  
   Contiene la clase `SoftBot`, encargada de gestionar la comunicación asíncrona con el microcontrolador mediante tópicos ROS 2.
+  Incluye control de **BOOST** via `/boost_valve`.
+  Incluye llenado de tanque (modo 3) y lectura de `/tank_state`.
+  Incluye **venteo** (modo 4) para liberar presión a atmósfera.
 
 - **`ejemplos/`**  
   Conjunto de scripts listos para ejecución directa que demuestran distintos modos de operación y validación del sistema.
@@ -46,20 +51,18 @@ cd software/ejemplos
 ```
 3. Ejecute el script deseado con **Python 3**:
 ```bash
-python3 01_locomocion_gusano.py
+python3 01_Locomocion_Gusano.py
 ```
 ## 🧪 Descripción de los Ejemplos
 
 | Archivo | Descripción Funcional |
 |-------|------------------------|
-| `01_locomocion_gusano.py` | Implementa una **máquina de estados finitos (FSM)** para coordinar las Cámaras A y B en un patrón de **movimiento peristáltico**. |
-| `02_identificacion_sistema.py` | Realiza una **prueba de respuesta al escalón (Step Response)** y genera un archivo `.csv` con precisión en **milisegundos**, adecuado para análisis científico y control. |
-| `03_configurar_seguridad.py` | **Interfaz de línea de comandos (CLI)** interactiva para ajustar dinámicamente los umbrales de seguridad \(P\_{max}, P\_{min}\) durante la operación. |
+| `01_Locomocion_Gusano.py` | Implementa una **máquina de estados finitos (FSM)** para coordinar las Cámaras A y B en un patrón de **movimiento peristáltico**. |
+| `02_Identificacion_Sistema.py` | Barrido multi-escalón para identificación; genera `.csv` con telemetría. |
+| `02a_Identificacion_Escalon_Simple.py` | Escalón simple (Step Response) para sintonización rápida. |
+| `03_Configurar_Seguridad.py` | **Interfaz de línea de comandos (CLI)** interactiva para ajustar dinámicamente los umbrales de seguridad \(P\_{max}, P\_{min}\) durante la operación. |
 
 ## 📌 Notas
 
 - Todos los ejemplos están diseñados para ejecutarse **en tiempo real** con el sistema neumático activo.
 - La arquitectura permite una integración directa con **ROS 2**, facilitando la extensión hacia nodos de planeación, control avanzado o supervisión.
-
-
-

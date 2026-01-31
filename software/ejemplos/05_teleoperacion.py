@@ -21,12 +21,13 @@ import time
 # Importar la interfaz del SoftBot
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import rclpy
-from softbot_interface import SoftBot
+from sdk.softbot_interface import SoftBot
 
 # Configuración Inicial
 TARGET_PRESSURE_POS = 15.0  # kPa inicial para inflado
 TARGET_PRESSURE_NEG = -15.0 # kPa inicial para succión
 STEP_SIZE = 1.0             # Incremento de presión por tecla
+BOOST_PULSE_S = 0.15        # Duración del pulso boost
 
 msg = """
 🤖 CONTROL MANUAL SOFTBOT v1.0
@@ -38,6 +39,8 @@ Moverse:
 Funciones:
    ESPACIO : PARADA DE EMERGENCIA (STOP)
    + / -   : Aumentar/Disminuir Presión Objetivo
+   B       : BOOST ON/OFF (válvula tanque)
+   T       : Pulso BOOST corto
 
 CTRL-C para salir
 """
@@ -78,6 +81,7 @@ if __name__ == '__main__':
         current_action = "STOP"
         current_chamber_name = "N/A"
         current_target = 0.0
+        boost_on = False
 
         while True:
             key = getKey()
@@ -148,6 +152,13 @@ if __name__ == '__main__':
 
             elif key == '\x03': # Ctrl+C
                 break
+            elif key in ('b', 'B'):
+                boost_on = not boost_on
+                bot.set_boost(boost_on)
+                print(f\"\\n⚡ BOOST {'ON' if boost_on else 'OFF'}\")
+            elif key in ('t', 'T'):
+                bot.pulse_boost(BOOST_PULSE_S)
+                print(f\"\\n⚡ PULSO BOOST {BOOST_PULSE_S:.2f}s\")
 
             # Actualizar feedback visual
             print_status(bot, current_action, current_chamber_name, current_target)

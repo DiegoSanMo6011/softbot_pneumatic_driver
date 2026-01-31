@@ -21,7 +21,7 @@ import time
 # Importar la interfaz del SoftBot desde el directorio superior
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import rclpy
-from softbot_interface import SoftBot
+from sdk.softbot_interface import SoftBot
 
 msg = """
 🐛 SOFTBOT AUTO-LOCOMOTION (Single Move)

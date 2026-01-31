@@ -16,7 +16,7 @@ from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import rclpy
-from softbot_interface import SoftBot
+from sdk.softbot_interface import SoftBot
 
 # --- CONFIGURACIÓN DEL EXPERIMENTO ---
 TARGET_POS = 15.0   # kPa (Cresta de la onda)
@@ -29,8 +29,10 @@ def main():
     rclpy.init()
     bot = SoftBot()
     
-    # Nombre de archivo único
-    filename = f"fast_switch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    out_dir = os.path.join(base_dir, 'experiments', time.strftime('%Y-%m'))
+    os.makedirs(out_dir, exist_ok=True)
+    filename = os.path.join(out_dir, f"fast_switch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     
     try:
         print("\n⚡ PRUEBA DE TRANSICIÓN RÁPIDA (ONDA CUADRADA) ⚡")
