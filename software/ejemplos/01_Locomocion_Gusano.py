@@ -12,7 +12,7 @@ import time
 # Añadir directorio padre al path para importar la librería
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import rclpy
-from softbot_interface import SoftBot
+from sdk.softbot_interface import SoftBot
 
 def main():
     rclpy.init()
