@@ -109,9 +109,13 @@ class SoftBot(Node):
         self.pub_mode.publish(Int8(data=int(mode)))
         self.pub_setpoint.publish(Float32(data=float(pwm_val)))
 
-    def set_boost(self, enabled: bool):
-        """Activa/desactiva la válvula de boost (tanque)"""
-        self.pub_boost.publish(Int8(data=1 if enabled else 0))
+    def set_boost(self, enabled: bool, repeats: int = 3, interval_s: float = 0.03):
+        """Activa/desactiva la válvula de boost (tanque) con reintentos."""
+        msg = Int8(data=1 if enabled else 0)
+        self.pub_boost.publish(msg)
+        for _ in range(max(0, int(repeats) - 1)):
+            time.sleep(max(0.0, float(interval_s)))
+            self.pub_boost.publish(msg)
 
     def pulse_boost(self, duration_s: float):
         """Pulso de boost por duración (segundos)"""

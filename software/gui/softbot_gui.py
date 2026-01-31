@@ -121,8 +121,11 @@ class SoftBotNode(Node):
         ]
         self.pub_tuning.publish(msg)
 
-    def set_boost(self, enabled: bool):
-        self.pub_boost.publish(Int8(data=1 if enabled else 0))
+    def set_boost(self, enabled: bool, repeats: int = 3, interval_ms: int = 30):
+        msg = Int8(data=1 if enabled else 0)
+        self.pub_boost.publish(msg)
+        for i in range(1, max(1, int(repeats))):
+            QtCore.QTimer.singleShot(interval_ms * i, lambda m=msg: self.pub_boost.publish(m))
 
     def fill_tank(self, target_kpa: float):
         self.send_command_reliable(0, 3, float(target_kpa))
