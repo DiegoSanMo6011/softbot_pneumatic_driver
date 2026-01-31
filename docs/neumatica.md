@@ -1,11 +1,11 @@
 # Neumática — Esquema y Conexiones
 
-## 1. Descripción actual (segun la ultima confirmacion)
+## 1. Descripción actual (segun la ultima iteracion)
 Sistema bidireccional con **4 bombas**:
 
 - **Presion**: 2 bombas en paralelo.
 - **Vacio**: 2 bombas en paralelo.
-- Ambas lineas entran al **HEADER / manifold**.
+- Ambas lineas entran al **HEADER**.
 - **Derivaciones del header**:
   - **BOOST**: tanque con dos lineas (carga y descarga) con check valves.
   - **SENSOR**: transductor de presion.
@@ -18,7 +18,7 @@ Sistema bidireccional con **4 bombas**:
 - **Check valves**: por ahora **solo en el tanque**.
 - Tanques disponibles:
   - **Plastico**: 2 entradas + 2 salidas, sin etiqueta.
-  - **Metal**: 2 puertos (carga/descarga), marcado **1.25 MPa** (se usara este).
+- **Metal**: 1 entrada + 1 salida, marcado **1.25 MPa** (se usara este).
 
 ## 3. Tanque (detalle confirmado)
 El tanque tiene **dos puertos**:
