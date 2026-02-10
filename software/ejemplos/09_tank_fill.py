@@ -5,12 +5,13 @@ Ejemplo 9: Llenado de tanque (modo 3)
 Inicia llenado y espera estado FULL o TIMEOUT.
 """
 
-import sys
 import os
+import sys
 import time
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
+
 from sdk.softbot_interface import SoftBot
 
 TARGET_KPA = 35.0
@@ -37,8 +38,12 @@ def main():
         start = time.time()
         while (time.time() - start) < TIMEOUT_S:
             state = bot.get_state()
-            tank_state = state.get('tank_state', 0)
-            print(f"\rEstado tanque: {STATE_MAP.get(tank_state, 'N/A')} | P={state['pressure']:.2f} kPa", end="")
+            tank_state = state.get("tank_state", 0)
+            print(
+                f"\rEstado tanque: {STATE_MAP.get(tank_state, 'N/A')} | "
+                f"P={state['pressure']:.2f} kPa",
+                end="",
+            )
 
             if tank_state in (2, 3):
                 break
@@ -51,5 +56,5 @@ def main():
         bot.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

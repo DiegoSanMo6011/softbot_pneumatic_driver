@@ -22,7 +22,7 @@ El sistema está dividido en dos capas:
 | Tópico | Tipo | Descripción |
 | --- | --- | --- |
 | `/active_chamber` | `std_msgs/Int8` | 0: bloqueado, 1: A, 2: B, 3: A+B |
-| `/pressure_mode` | `std_msgs/Int8` | 1: PID inflado, -1: PID succión, 2: PWM inflado, -2: PWM succión, **3: llenado de tanque**, **4: venteo** |
+| `/pressure_mode` | `std_msgs/Int8` | 1: PID inflado, -1: PID succión, 2: PWM inflado, -2: PWM succión, **3: llenado de tanque**, **4: venteo**, **5: turbo pre-PID inflado** |
 | `/pressure_setpoint` | `std_msgs/Float32` | Setpoint (kPa o PWM según modo) |
 | `/pressure_feedback` | `std_msgs/Float32` | Presión medida en kPa |
 | `/system_debug` | `std_msgs/Int16MultiArray` | [PWM_main, PWM_aux, error*10, mode] |

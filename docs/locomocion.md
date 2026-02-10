@@ -31,6 +31,10 @@ En `software/locomotion/x_crabs.py` puedes activar el boost:
 - `BOOST_ENABLE = True`
 - `BOOST_PULSE_MS = 150.0`
 
+Con `BOOST_ENABLE = True`, las fases de inflado seleccionadas usan
+`inflate_turbo()` (modo `5`), que ejecuta turbo pre-PID en firmware y luego
+cae automáticamente a PID inflado.
+
 ## 5. Script alterno
 ```
 software/locomotion/locomocion_ab.py

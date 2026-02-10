@@ -10,6 +10,7 @@ El proyecto integra:
 - **SDK en Python (ROS 2)** para teleoperación, experimentación y tuning.
 - **Scripts de locomoción** (incluye salto y caminata alternada).
 - **GUI de escritorio** para telemetría en tiempo real y debugging.
+- **Modo 5 Turbo pre-PID** para inflado rápido y transición automática a PID.
 - **Datos de experimentación** y documentación técnica.
 
 ## 2. Estructura del repositorio
@@ -78,3 +79,12 @@ carpetas por mes: `experiments/YYYY-MM/`.
 
 ## 6. Video de demo
 [![SoftBot Pneumatic Driver – Video de Demostración](https://img.youtube.com/vi/uC6NLilY3fU/0.jpg)](https://youtu.be/uC6NLilY3fU)
+
+## 7. Calidad de código
+Validaciones recomendadas:
+```bash
+python3 -m py_compile $(find software -type f -name "*.py")
+ruff check software
+ruff format --check software
+clang-format --dry-run --Werror firmware/softbot_controller/softbot_controller.ino
+```

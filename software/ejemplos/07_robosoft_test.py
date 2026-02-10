@@ -11,16 +11,17 @@ Controles:
   [ Q ]       : Salir
 """
 
-import sys
-import select
-import termios
-import tty
 import os
+import select
+import sys
+import termios
 import time
+import tty
 
 # Importar la interfaz del SoftBot desde el directorio superior
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
+
 from sdk.softbot_interface import SoftBot
 
 msg = """
@@ -33,11 +34,12 @@ Controles:
    [ Q ]       : Salir
 """
 
+
 def getKey():
     """Lee tecla sin bloqueo."""
     tty.setraw(sys.stdin.fileno())
     rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
-    key = sys.stdin.read(1) if rlist else ''
+    key = sys.stdin.read(1) if rlist else ""
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
 
@@ -48,6 +50,7 @@ class AutoSingleMoveSequencer:
       Fase 0: Succión (contracción)
       Fase 1: Inflado (expansión)
     """
+
     def __init__(self, bot: SoftBot):
         self.bot = bot
         self.running = False
@@ -58,9 +61,9 @@ class AutoSingleMoveSequencer:
 
         # --- CONFIG (edita aquí) ---
         self.T_PREPARACION = 1.5  # s (succión)
-        self.T_SALTO       = 2.0  # s (inflado)
-        self.P_SUCCION     = -18.0  # kPa
-        self.P_INFLADO     =  35.0  # kPa
+        self.T_SALTO = 2.0  # s (inflado)
+        self.P_SUCCION = -18.0  # kPa
+        self.P_INFLADO = 35.0  # kPa
 
         # --- PRINT SENSOR (rate-limit) ---
         self.last_print = 0.0
@@ -105,7 +108,8 @@ class AutoSingleMoveSequencer:
             return
 
         sys.stdout.write(
-            f"\r\033[K📟 Fase: {self._phase_name()} | Objetivo: {self._target_value():.2f} kPa | Actual: {p:.2f} kPa"
+            f"\r\033[K📟 Fase: {self._phase_name()} | "
+            f"Objetivo: {self._target_value():.2f} kPa | Actual: {p:.2f} kPa"
         )
         sys.stdout.flush()
 
@@ -121,7 +125,10 @@ class AutoSingleMoveSequencer:
         # Fase 0: CONTRACCIÓN (succión) A+B
         if self.phase == 0:
             if self.first_run:
-                print(f"\n   Fase 1/2: CONTRACCIÓN (succión) {self.T_PREPARACION:.2f}s | {self.P_SUCCION} kPa")
+                print(
+                    "\n   Fase 1/2: CONTRACCIÓN (succión) "
+                    f"{self.T_PREPARACION:.2f}s | {self.P_SUCCION} kPa"
+                )
                 self.bot.set_chamber(3)
                 self.bot.suction(self.P_SUCCION)
                 self.first_run = False
@@ -134,7 +141,9 @@ class AutoSingleMoveSequencer:
         # Fase 1: EXPANSIÓN (inflado) A+B
         elif self.phase == 1:
             if self.first_run:
-                print(f"\n   Fase 2/2: EXPANSIÓN (inflado) {self.T_SALTO:.2f}s | {self.P_INFLADO} kPa")
+                print(
+                    f"\n   Fase 2/2: EXPANSIÓN (inflado) {self.T_SALTO:.2f}s | {self.P_INFLADO} kPa"
+                )
                 self.bot.set_chamber(3)
                 self.bot.inflate(self.P_INFLADO)
                 self.first_run = False
@@ -145,7 +154,7 @@ class AutoSingleMoveSequencer:
                 self.first_run = True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     settings = termios.tcgetattr(sys.stdin)
     rclpy.init()
 
@@ -161,11 +170,11 @@ if __name__ == '__main__':
         while True:
             key = getKey()
 
-            if key in ('s', 'S'):
+            if key in ("s", "S"):
                 seq.start()
-            elif key == ' ':
+            elif key == " ":
                 seq.stop()
-            elif key in ('q', 'Q', '\x03'):
+            elif key in ("q", "Q", "\x03"):
                 break
 
             seq.tick()

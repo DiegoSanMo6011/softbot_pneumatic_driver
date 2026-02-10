@@ -10,10 +10,10 @@ Características v8.1:
 - Telemetría en terminal.
 """
 
-import sys
 import os
-import time
+import sys
 import threading
+import time
 from datetime import datetime
 
 # Importar OpenCV
@@ -23,16 +23,18 @@ except ImportError:
     print("❌ Error: Necesitas instalar opencv. Ejecuta: pip install opencv-python")
     sys.exit(1)
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
+
 from sdk.softbot_interface import SoftBot
+
 
 # --- CLASE DE GRABACIÓN Y VISUALIZACIÓN ---
 class WebcamRecorder:
     def __init__(
         self,
-        filename='demo_video.mp4',
-        camera_device="/dev/v4l/by-id/usb-Icatchtek_Co_Ltd_General_Image_Device-video-index0"
+        filename="demo_video.mp4",
+        camera_device="/dev/v4l/by-id/usb-Icatchtek_Co_Ltd_General_Image_Device-video-index0",
     ):
         # Abrir cámara USB externa explícita usando V4L2
         self.cap = cv2.VideoCapture(camera_device, cv2.CAP_V4L2)
@@ -58,10 +60,8 @@ class WebcamRecorder:
         self.fps = 20.0
 
         # Codec mp4v
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        self.writer = cv2.VideoWriter(
-            filename, fourcc, self.fps, (self.width, self.height)
-        )
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self.writer = cv2.VideoWriter(filename, fourcc, self.fps, (self.width, self.height))
 
         # Hilo de grabación
         self.thread = threading.Thread(target=self._record_loop, daemon=True)
@@ -121,17 +121,17 @@ class WebcamRecorder:
                     1,
                 )
 
-                cv2.imshow(
-                    "SoftBot Live Monitor (Graba tu pantalla ahora)", frame
-                )
+                cv2.imshow("SoftBot Live Monitor (Graba tu pantalla ahora)", frame)
                 cv2.waitKey(1)
 
                 self.writer.write(frame)
             else:
                 time.sleep(0.1)
 
+
 # --- VARIABLES GLOBALES ---
 recorder = None
+
 
 def print_header(text):
     print("\n" + "=" * 60)
@@ -140,10 +140,12 @@ def print_header(text):
     if recorder:
         recorder.set_label(text)
 
+
 def esperar_usuario(msg="\n👉 Presiona [ENTER] para continuar... "):
     if recorder:
         recorder.set_label("PAUSA: Esperando Usuario...")
     input(msg)
+
 
 def reset_robot_state(bot):
     if recorder:
@@ -158,15 +160,15 @@ def reset_robot_state(bot):
     bot.stop()
     print("    ✅ Robot listo.")
 
+
 def monitor_loop(bot, duration_sec, scene_name=""):
     if recorder:
         recorder.set_label(scene_name)
     for i in range(duration_sec):
         state = bot.get_state()
-        print(
-            f"    T={i+1}s | P: {state['pressure']:.2f} kPa | PWM: {state['pwm_main']}"
-        )
+        print(f"    T={i + 1}s | P: {state['pressure']:.2f} kPa | PWM: {state['pwm_main']}")
         time.sleep(1)
+
 
 def main():
     global recorder
@@ -178,7 +180,7 @@ def main():
     print("🎥 Inicializando cámara USB externa (Icatchtek by-id)...")
     recorder = WebcamRecorder(
         filename=video_file,
-        camera_device="/dev/v4l/by-id/usb-Icatchtek_Co_Ltd_General_Image_Device-video-index0"
+        camera_device="/dev/v4l/by-id/usb-Icatchtek_Co_Ltd_General_Image_Device-video-index0",
     )
     recorder.start()
 
@@ -279,6 +281,7 @@ def main():
     finally:
         bot.close()
         recorder.stop()
+
 
 if __name__ == "__main__":
     main()

@@ -37,17 +37,25 @@ python3 software/gui/softbot_gui.py
 - PWM principal y auxiliar
 - Modo actual y error estimado
 - Estado de BOOST (tanque)
- - Estado del tanque (idle/llenando/lleno/timeout)
+- Estado del tanque (idle/llenando/lleno/timeout)
 
-## 5.1 Controles de BOOST
-- **BOOST ON/OFF** abre o cierra la válvula del tanque.
+## 5.1 Flujo recomendado: Turbo + PID (un clic)
+- **Inflar Turbo+PID** ejecuta el modo `5` del firmware:
+  - Prefase turbo de 150 ms (boost + inflado agresivo).
+  - Transición automática a PID inflado (modo `1`).
+- Requiere:
+  - Cámara activa en `1`, `2` o `3`.
+  - Setpoint positivo (> 0 kPa).
+
+## 5.2 Controles de BOOST manual (diagnóstico)
+- **BOOST ON/OFF** abre o cierra manualmente la válvula del tanque.
 - **Pulso BOOST** abre por un tiempo configurable (ms).
 
-## 5.2 Controles de llenado de tanque
+## 5.3 Controles de llenado de tanque
 - **Llenar tanque**: inicia modo 3 con setpoint (kPa).
 - **Detener llenado**: corta el modo y apaga actuadores.
 
-## 5.3 Controles de venteo
+## 5.4 Controles de venteo
 - **Ventear**: abre A->R para liberar presion durante un tiempo configurable.
 
 ## 6. Logging

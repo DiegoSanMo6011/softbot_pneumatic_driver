@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# ROS / firmware temporary artifacts
+.cache/
+.pio/
+*.bin
+*.elf
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db

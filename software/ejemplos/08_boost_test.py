@@ -5,15 +5,16 @@ Ejemplo 8: Prueba de BOOST (tanque)
 B: toggle boost, P: pulso breve, ESPACIO: stop, Q: salir
 """
 
-import sys
-import select
-import termios
-import tty
 import os
+import select
+import sys
+import termios
 import time
+import tty
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
+
 from sdk.softbot_interface import SoftBot
 
 BOOST_PULSE_S = 0.15
@@ -31,7 +32,7 @@ Q : Salir
 def getKey():
     tty.setraw(sys.stdin.fileno())
     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-    key = sys.stdin.read(1) if rlist else ''
+    key = sys.stdin.read(1) if rlist else ""
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
 
@@ -39,12 +40,13 @@ def getKey():
 def print_status(bot, boost_on):
     state = bot.get_state()
     sys.stdout.write(
-        f"\r\033[KBoost={'ON' if boost_on else 'OFF'} | P={state['pressure']:.2f} kPa | PWM={state['pwm_main']}" 
+        f"\r\033[KBoost={'ON' if boost_on else 'OFF'} | "
+        f"P={state['pressure']:.2f} kPa | PWM={state['pwm_main']}"
     )
     sys.stdout.flush()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     settings = termios.tcgetattr(sys.stdin)
     rclpy.init()
 
@@ -58,18 +60,18 @@ if __name__ == '__main__':
 
         while True:
             key = getKey()
-            if key in ('b', 'B'):
+            if key in ("b", "B"):
                 boost_on = not boost_on
                 bot.set_boost(boost_on)
                 print(f"\n⚡ BOOST {'ON' if boost_on else 'OFF'}")
-            elif key in ('p', 'P'):
+            elif key in ("p", "P"):
                 bot.pulse_boost(BOOST_PULSE_S)
                 print(f"\n⚡ PULSO BOOST {BOOST_PULSE_S:.2f}s")
-            elif key == ' ':
+            elif key == " ":
                 bot.stop()
                 boost_on = False
                 print("\n🛑 STOP")
-            elif key in ('q', 'Q', '\x03'):
+            elif key in ("q", "Q", "\x03"):
                 break
 
             print_status(bot, boost_on)
