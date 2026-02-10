@@ -8,15 +8,16 @@ A+B sincronizado. Transiciones por presión, pero con:
 - SNAP opcional: stop corto entre fases
 """
 
-import sys
-import select
-import termios
-import tty
 import os
+import select
+import sys
+import termios
 import time
+import tty
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
+
 from sdk.softbot_interface import SoftBot
 
 msg = """
@@ -29,10 +30,11 @@ Controles:
    [ Q ]       : Salir
 """
 
+
 def getKey():
     tty.setraw(sys.stdin.fileno())
     rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
-    key = sys.stdin.read(1) if rlist else ''
+    key = sys.stdin.read(1) if rlist else ""
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
 
@@ -45,6 +47,7 @@ class AutoSingleMoveSequencer:
       - elapsed >= MIN_TIME  Y
       - (estuvo dentro de tolerancia por SETTLE_TIME)  O (elapsed >= T_MAX)
     """
+
     def __init__(self, bot: SoftBot):
         self.bot = bot
         self.running = False
@@ -59,17 +62,17 @@ class AutoSingleMoveSequencer:
 
         # Setpoints (ajusta según tu robot)
         self.P_SUCCION = -25.0
-        self.P_INFLADO =  40.0
+        self.P_INFLADO = 40.0
 
         # Tolerancia para considerar "llegué"
         self.TOL = 3.0  # kPa
 
         # Tiempo mínimo por fase (clave para que sí complete movimiento)
-        self.MIN_SUCCION = 0.50   # s
-        self.MIN_INFLADO = 1.00   # s
+        self.MIN_SUCCION = 0.50  # s
+        self.MIN_INFLADO = 1.00  # s
 
         # Tiempo que debe mantenerse "estable" dentro de tolerancia
-        self.SETTLE_TIME = 0.18   # s (150-250ms suele ir bien)
+        self.SETTLE_TIME = 0.18  # s (150-250ms suele ir bien)
 
         # Timeout máximo por fase (por si no llega)
         self.T_SUCCION_MAX = 1.60  # s
@@ -112,7 +115,8 @@ class AutoSingleMoveSequencer:
             return
 
         sys.stdout.write(
-            f"\r\033[K📟 Fase: {self._phase_name()} | Obj: {self._target_value():.1f} kPa | Act: {p:.1f} kPa"
+            f"\r\033[K📟 Fase: {self._phase_name()} | "
+            f"Obj: {self._target_value():.1f} kPa | Act: {p:.1f} kPa"
         )
         sys.stdout.flush()
 
@@ -194,7 +198,9 @@ class AutoSingleMoveSequencer:
         if self.phase == 0:
             if self.first_run:
                 print(
-                    f"\n   Fase 1/2: SUCCIÓN | Obj {self.P_SUCCION:.1f} kPa | MIN {self.MIN_SUCCION:.2f}s | MAX {self.T_SUCCION_MAX:.2f}s"
+                    "\n   Fase 1/2: SUCCIÓN | "
+                    f"Obj {self.P_SUCCION:.1f} kPa | "
+                    f"MIN {self.MIN_SUCCION:.2f}s | MAX {self.T_SUCCION_MAX:.2f}s"
                 )
                 self.bot.set_chamber(3)
                 self.bot.suction(self.P_SUCCION)
@@ -221,7 +227,9 @@ class AutoSingleMoveSequencer:
         elif self.phase == 1:
             if self.first_run:
                 print(
-                    f"\n   Fase 2/2: INFLADO | Obj {self.P_INFLADO:.1f} kPa | MIN {self.MIN_INFLADO:.2f}s | MAX {self.T_INFLADO_MAX:.2f}s"
+                    "\n   Fase 2/2: INFLADO | "
+                    f"Obj {self.P_INFLADO:.1f} kPa | "
+                    f"MIN {self.MIN_INFLADO:.2f}s | MAX {self.T_INFLADO_MAX:.2f}s"
                 )
                 self.bot.set_chamber(3)
                 self.bot.inflate(self.P_INFLADO)
@@ -243,7 +251,7 @@ class AutoSingleMoveSequencer:
                 self._reset_within()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     settings = termios.tcgetattr(sys.stdin)
     rclpy.init()
 
@@ -259,11 +267,11 @@ if __name__ == '__main__':
         while True:
             key = getKey()
 
-            if key in ('s', 'S'):
+            if key in ("s", "S"):
                 seq.start()
-            elif key == ' ':
+            elif key == " ":
                 seq.stop()
-            elif key in ('q', 'Q', '\x03'):
+            elif key in ("q", "Q", "\x03"):
                 break
 
             seq.tick()

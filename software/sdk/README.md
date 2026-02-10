@@ -34,6 +34,7 @@ software/
 - **`sdk/softbot_interface.py`**  
   Librería principal.  
   Contiene la clase `SoftBot`, encargada de gestionar la comunicación asíncrona con el microcontrolador mediante tópicos ROS 2.
+  Incluye `inflate_turbo(pressure_kpa)` para modo 5 (turbo pre-PID).
   Incluye control de **BOOST** via `/boost_valve`.
   Incluye llenado de tanque (modo 3) y lectura de `/tank_state`.
   Incluye **venteo** (modo 4) para liberar presión a atmósfera.

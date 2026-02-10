@@ -6,10 +6,10 @@ GUI de escritorio para SoftBot (telemetría en tiempo real + control básico).
 - Logging: CSV en experiments/logs/
 """
 
+import csv
 import os
 import sys
 import time
-import csv
 from collections import deque
 
 try:
@@ -26,40 +26,99 @@ except Exception as exc:
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Int8, Float32MultiArray, Int16MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16MultiArray
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-LOG_DIR = os.path.join(BASE_DIR, 'experiments', 'logs')
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SOFTWARE_DIR = os.path.join(BASE_DIR, "software")
+if SOFTWARE_DIR not in sys.path:
+    sys.path.append(SOFTWARE_DIR)
+
+from sdk.protocol import (  # noqa: E402
+    CHAMBER_BLOCKED,
+    MODE_LABELS,
+    MODE_PID_INFLATE,
+    MODE_PID_INFLATE_TURBO,
+    MODE_PID_SUCTION,
+    MODE_PWM_INFLATE,
+    MODE_PWM_SUCTION,
+    MODE_STOP,
+    MODE_TANK_FILL,
+    MODE_VENT,
+)
+
+LOG_DIR = os.path.join(BASE_DIR, "experiments", "logs")
+
+MODE_OPTIONS = [
+    ("0 - Stop", MODE_STOP),
+    ("1 - PID Inflado", MODE_PID_INFLATE),
+    ("-1 - PID Succión", MODE_PID_SUCTION),
+    ("2 - PWM Inflado", MODE_PWM_INFLATE),
+    ("-2 - PWM Succión", MODE_PWM_SUCTION),
+]
 
 
 class SoftBotNode(Node):
     def __init__(self):
-        super().__init__('softbot_gui')
+        super().__init__("softbot_gui")
 
-        # --- Tópicos ---
-        self.topic_chamber = '/active_chamber'
-        self.topic_mode = '/pressure_mode'
-        self.topic_setpoint = '/pressure_setpoint'
-        self.topic_tuning = '/tuning_params'
-        self.topic_boost = '/boost_valve'
-        self.topic_tank_state = '/tank_state'
-        self.topic_feedback = '/pressure_feedback'
-        self.topic_debug = '/system_debug'
+        # --- Topicos ---
+        self.topic_chamber = "/active_chamber"
+        self.topic_mode = "/pressure_mode"
+        self.topic_setpoint = "/pressure_setpoint"
+        self.topic_tuning = "/tuning_params"
+        self.topic_boost = "/boost_valve"
+        self.topic_tank_state = "/tank_state"
+        self.topic_feedback = "/pressure_feedback"
+        self.topic_debug = "/system_debug"
 
         # --- Publicadores ---
         self.pub_chamber = self.create_publisher(Int8, self.topic_chamber, 10)
         self.pub_mode = self.create_publisher(Int8, self.topic_mode, 10)
         self.pub_setpoint = self.create_publisher(Float32, self.topic_setpoint, 10)
-        self.pub_tuning = self.create_publisher(Float32MultiArray, self.topic_tuning, 10)
+        self.pub_tuning = self.create_publisher(
+            Float32MultiArray,
+            self.topic_tuning,
+            10,
+        )
         self.pub_boost = self.create_publisher(Int8, self.topic_boost, 10)
 
         # --- Suscriptores ---
-        self.sub_feedback = self.create_subscription(Float32, self.topic_feedback, self._cb_feedback, 10)
-        self.sub_debug = self.create_subscription(Int16MultiArray, self.topic_debug, self._cb_debug, 10)
-        self.sub_setpoint = self.create_subscription(Float32, self.topic_setpoint, self._cb_setpoint, 10)
-        self.sub_mode = self.create_subscription(Int8, self.topic_mode, self._cb_mode, 10)
-        self.sub_chamber = self.create_subscription(Int8, self.topic_chamber, self._cb_chamber, 10)
-        self.sub_tank_state = self.create_subscription(Int8, self.topic_tank_state, self._cb_tank_state, 10)
+        self.sub_feedback = self.create_subscription(
+            Float32,
+            self.topic_feedback,
+            self._cb_feedback,
+            10,
+        )
+        self.sub_debug = self.create_subscription(
+            Int16MultiArray,
+            self.topic_debug,
+            self._cb_debug,
+            10,
+        )
+        self.sub_setpoint = self.create_subscription(
+            Float32,
+            self.topic_setpoint,
+            self._cb_setpoint,
+            10,
+        )
+        self.sub_mode = self.create_subscription(
+            Int8,
+            self.topic_mode,
+            self._cb_mode,
+            10,
+        )
+        self.sub_chamber = self.create_subscription(
+            Int8,
+            self.topic_chamber,
+            self._cb_chamber,
+            10,
+        )
+        self.sub_tank_state = self.create_subscription(
+            Int8,
+            self.topic_tank_state,
+            self._cb_tank_state,
+            10,
+        )
 
         # --- Estado ---
         self.pressure_kpa = 0.0
@@ -93,31 +152,50 @@ class SoftBotNode(Node):
     def _cb_tank_state(self, msg: Int8):
         self.tank_state = int(msg.data)
 
+    @staticmethod
+    def _valid_chamber(chamber: int) -> bool:
+        return chamber in (0, 1, 2, 3)
+
     def send_command(self, chamber: int, mode: int, setpoint: float):
+        if not self._valid_chamber(int(chamber)):
+            raise ValueError(f"Camara invalida: {chamber}. Usa 0, 1, 2 o 3.")
         self.pub_chamber.publish(Int8(data=int(chamber)))
         self.pub_mode.publish(Int8(data=int(mode)))
         self.pub_setpoint.publish(Float32(data=float(setpoint)))
 
-    def send_command_reliable(self, chamber: int, mode: int, setpoint: float, repeats: int = 3, interval_ms: int = 30):
+    def send_command_reliable(
+        self,
+        chamber: int,
+        mode: int,
+        setpoint: float,
+        repeats: int = 3,
+        interval_ms: int = 30,
+    ):
         self.send_command(chamber, mode, setpoint)
         for i in range(1, repeats):
-            QtCore.QTimer.singleShot(interval_ms * i, lambda c=chamber, m=mode, s=setpoint: self.send_command(c, m, s))
+            QtCore.QTimer.singleShot(
+                interval_ms * i,
+                lambda c=chamber, m=mode, s=setpoint: self.send_command(c, m, s),
+            )
 
     def stop(self):
-        self.pub_mode.publish(Int8(data=0))
+        self.pub_mode.publish(Int8(data=MODE_STOP))
         self.pub_setpoint.publish(Float32(data=0.0))
 
     def e_stop(self):
-        self.pub_chamber.publish(Int8(data=0))
-        self.pub_mode.publish(Int8(data=0))
+        self.pub_chamber.publish(Int8(data=CHAMBER_BLOCKED))
+        self.pub_mode.publish(Int8(data=MODE_STOP))
         self.pub_setpoint.publish(Float32(data=0.0))
 
     def update_tuning(self, kp_pos, ki_pos, kp_neg, ki_neg, max_safe, min_safe):
         msg = Float32MultiArray()
         msg.data = [
-            float(kp_pos), float(ki_pos),
-            float(kp_neg), float(ki_neg),
-            float(max_safe), float(min_safe)
+            float(kp_pos),
+            float(ki_pos),
+            float(kp_neg),
+            float(ki_neg),
+            float(max_safe),
+            float(min_safe),
         ]
         self.pub_tuning.publish(msg)
 
@@ -125,13 +203,23 @@ class SoftBotNode(Node):
         msg = Int8(data=1 if enabled else 0)
         self.pub_boost.publish(msg)
         for i in range(1, max(1, int(repeats))):
-            QtCore.QTimer.singleShot(interval_ms * i, lambda m=msg: self.pub_boost.publish(m))
+            QtCore.QTimer.singleShot(
+                interval_ms * i,
+                lambda m=msg: self.pub_boost.publish(m),
+            )
 
     def fill_tank(self, target_kpa: float):
-        self.send_command_reliable(0, 3, float(target_kpa))
+        self.send_command_reliable(CHAMBER_BLOCKED, MODE_TANK_FILL, float(target_kpa))
+
+    def inflate_turbo(self, chamber_id: int, target_kpa: float):
+        self.send_command_reliable(
+            chamber_id,
+            MODE_PID_INFLATE_TURBO,
+            float(target_kpa),
+        )
 
     def vent(self, chamber_id: int, duration_ms: int):
-        self.send_command_reliable(chamber_id, 4, 0.0)
+        self.send_command_reliable(chamber_id, MODE_VENT, 0.0)
         if duration_ms > 0:
             QtCore.QTimer.singleShot(duration_ms, self.stop)
 
@@ -141,7 +229,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         super().__init__()
         self.node = node
 
-        self.setWindowTitle('SoftBot GUI — Telemetría en Tiempo Real')
+        self.setWindowTitle("SoftBot GUI — Telemetría en Tiempo Real")
         self.resize(1200, 720)
 
         self._init_state()
@@ -175,13 +263,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.combo_chamber.addItems(["0 - Bloqueo", "1 - Cámara A", "2 - Cámara B", "3 - A+B"])
 
         self.combo_mode = QtWidgets.QComboBox()
-        self.combo_mode.addItems([
-            "0 - Stop",
-            "1 - PID Inflado",
-            "-1 - PID Succión",
-            "2 - PWM Inflado",
-            "-2 - PWM Succión"
-        ])
+        self.combo_mode.addItems([label for label, _ in MODE_OPTIONS])
         self.combo_mode.currentIndexChanged.connect(self.on_mode_changed)
 
         self.spin_setpoint = QtWidgets.QDoubleSpinBox()
@@ -190,12 +272,15 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.spin_setpoint.setValue(0.0)
 
         btn_send = QtWidgets.QPushButton("Enviar comando")
+        btn_turbo_pid = QtWidgets.QPushButton("Inflar Turbo+PID")
+        btn_turbo_pid.setToolTip("Flujo recomendado: pulso turbo automatico y entrada a PID.")
         btn_stop = QtWidgets.QPushButton("Stop")
         btn_estop = QtWidgets.QPushButton("E-STOP")
         btn_reset = QtWidgets.QPushButton("Reset gráficas")
         self.btn_log = QtWidgets.QPushButton("Iniciar log")
 
         btn_send.clicked.connect(self.on_send)
+        btn_turbo_pid.clicked.connect(self.on_turbo_pid)
         btn_stop.clicked.connect(self.on_stop)
         btn_estop.clicked.connect(self.on_estop)
         btn_reset.clicked.connect(self.on_reset)
@@ -229,7 +314,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         vent_layout.addRow(btn_vent)
 
         # --- Boost ---
-        boost_box = QtWidgets.QGroupBox("BOOST (tanque)")
+        boost_box = QtWidgets.QGroupBox("BOOST manual (diagnóstico)")
         boost_layout = QtWidgets.QFormLayout(boost_box)
         self.btn_boost = QtWidgets.QPushButton("BOOST: OFF")
         self.btn_boost.setCheckable(True)
@@ -247,14 +332,34 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         # --- Tuning ---
         tuning_box = QtWidgets.QGroupBox("Tuning rápido")
         tuning_layout = QtWidgets.QFormLayout(tuning_box)
-        self.kp_pos = QtWidgets.QDoubleSpinBox(); self.kp_pos.setRange(-2000, 2000); self.kp_pos.setValue(24.0)
-        self.ki_pos = QtWidgets.QDoubleSpinBox(); self.ki_pos.setRange(-5000, 5000); self.ki_pos.setValue(1500.0)
-        self.kp_neg = QtWidgets.QDoubleSpinBox(); self.kp_neg.setRange(-2000, 2000); self.kp_neg.setValue(-75.0)
-        self.ki_neg = QtWidgets.QDoubleSpinBox(); self.ki_neg.setRange(-5000, 5000); self.ki_neg.setValue(-750.0)
-        self.max_safe = QtWidgets.QDoubleSpinBox(); self.max_safe.setRange(0, 200); self.max_safe.setValue(55.0)
-        self.min_safe = QtWidgets.QDoubleSpinBox(); self.min_safe.setRange(-200, 0); self.min_safe.setValue(-60.0)
+        self.kp_pos = QtWidgets.QDoubleSpinBox()
+        self.kp_pos.setRange(-2000, 2000)
+        self.kp_pos.setValue(24.0)
+        self.ki_pos = QtWidgets.QDoubleSpinBox()
+        self.ki_pos.setRange(-5000, 5000)
+        self.ki_pos.setValue(1500.0)
+        self.kp_neg = QtWidgets.QDoubleSpinBox()
+        self.kp_neg.setRange(-2000, 2000)
+        self.kp_neg.setValue(-75.0)
+        self.ki_neg = QtWidgets.QDoubleSpinBox()
+        self.ki_neg.setRange(-5000, 5000)
+        self.ki_neg.setValue(-750.0)
+        self.max_safe = QtWidgets.QDoubleSpinBox()
+        self.max_safe.setRange(0, 200)
+        self.max_safe.setValue(55.0)
+        self.min_safe = QtWidgets.QDoubleSpinBox()
+        self.min_safe.setRange(-200, 0)
+        self.min_safe.setValue(-60.0)
 
-        for widget in [self.kp_pos, self.ki_pos, self.kp_neg, self.ki_neg, self.max_safe, self.min_safe]:
+        tuning_widgets = [
+            self.kp_pos,
+            self.ki_pos,
+            self.kp_neg,
+            self.ki_neg,
+            self.max_safe,
+            self.min_safe,
+        ]
+        for widget in tuning_widgets:
             widget.setDecimals(2)
 
         tuning_layout.addRow("Kp+", self.kp_pos)
@@ -279,6 +384,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         control_panel.addWidget(QtWidgets.QLabel("Setpoint (kPa o PWM)"))
         control_panel.addWidget(self.spin_setpoint)
         control_panel.addWidget(btn_send)
+        control_panel.addWidget(btn_turbo_pid)
         control_panel.addWidget(btn_stop)
         control_panel.addWidget(btn_estop)
         control_panel.addWidget(self.btn_log)
@@ -295,16 +401,28 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         pg.setConfigOptions(antialias=True)
 
         self.plot_pressure = pg.PlotWidget(title="Presión / Setpoint")
-        self.plot_pressure.setLabel('left', 'kPa / PWM')
-        self.plot_pressure.setLabel('bottom', 'Tiempo', 's')
-        self.curve_pressure = self.plot_pressure.plot(pen=pg.mkPen('#00A6FB', width=2), name='Presión')
-        self.curve_setpoint = self.plot_pressure.plot(pen=pg.mkPen('#FFB703', width=2, style=QtCore.Qt.DashLine), name='Setpoint')
+        self.plot_pressure.setLabel("left", "kPa / PWM")
+        self.plot_pressure.setLabel("bottom", "Tiempo", "s")
+        self.curve_pressure = self.plot_pressure.plot(
+            pen=pg.mkPen("#00A6FB", width=2),
+            name="Presión",
+        )
+        self.curve_setpoint = self.plot_pressure.plot(
+            pen=pg.mkPen("#FFB703", width=2, style=QtCore.Qt.DashLine),
+            name="Setpoint",
+        )
 
         self.plot_pwm = pg.PlotWidget(title="PWM (Main/Aux)")
-        self.plot_pwm.setLabel('left', 'PWM')
-        self.plot_pwm.setLabel('bottom', 'Tiempo', 's')
-        self.curve_pwm_main = self.plot_pwm.plot(pen=pg.mkPen('#8AC926', width=2), name='PWM Main')
-        self.curve_pwm_aux = self.plot_pwm.plot(pen=pg.mkPen('#FF595E', width=2), name='PWM Aux')
+        self.plot_pwm.setLabel("left", "PWM")
+        self.plot_pwm.setLabel("bottom", "Tiempo", "s")
+        self.curve_pwm_main = self.plot_pwm.plot(
+            pen=pg.mkPen("#8AC926", width=2),
+            name="PWM Main",
+        )
+        self.curve_pwm_aux = self.plot_pwm.plot(
+            pen=pg.mkPen("#FF595E", width=2),
+            name="PWM Aux",
+        )
 
         plot_panel.addWidget(self.plot_pressure)
         plot_panel.addWidget(self.plot_pwm)
@@ -335,35 +453,71 @@ class SoftBotGUI(QtWidgets.QMainWindow):
 
         tank_map = {0: "IDLE", 1: "LLENANDO", 2: "LLENO", 3: "TIMEOUT"}
         tank_txt = tank_map.get(self.node.tank_state, "N/A")
+        mode_txt = MODE_LABELS.get(self.node.mode, str(self.node.mode))
+        boost_txt = (
+            "ON(auto)"
+            if self.node.mode == MODE_PID_INFLATE_TURBO
+            else ("ON" if self.boost_enabled else "OFF")
+        )
 
         self.label_status.setText(
             f"P={self.node.pressure_kpa:.2f} kPa | "
             f"SP={self.node.setpoint:.2f} | "
             f"PWM=({self.node.pwm_main},{self.node.pwm_aux}) | "
-            f"Mode={self.node.mode} | Err={self.node.error_raw/10.0:.2f} | "
-            f"Boost={'ON' if self.boost_enabled else 'OFF'} | "
+            f"Mode={self.node.mode} ({mode_txt}) | "
+            f"Err={self.node.error_raw / 10.0:.2f} | "
+            f"Boost={boost_txt} | "
             f"Tanque={tank_txt}"
         )
 
         if self.log_writer:
-            self.log_writer.writerow([
-                f"{now:.4f}",
-                f"{self.node.setpoint:.4f}",
-                f"{self.node.pressure_kpa:.4f}",
-                self.node.pwm_main,
-                self.node.pwm_aux,
-                self.node.mode,
-                f"{self.node.error_raw/10.0:.4f}",
-            ])
+            self.log_writer.writerow(
+                [
+                    f"{now:.4f}",
+                    f"{self.node.setpoint:.4f}",
+                    f"{self.node.pressure_kpa:.4f}",
+                    self.node.pwm_main,
+                    self.node.pwm_aux,
+                    self.node.mode,
+                    f"{self.node.error_raw / 10.0:.4f}",
+                ]
+            )
 
     def on_send(self):
         chamber = self.combo_chamber.currentIndex()
-        mode = [0, 1, -1, 2, -2][self.combo_mode.currentIndex()]
+        mode = MODE_OPTIONS[self.combo_mode.currentIndex()][1]
         setpoint = self.spin_setpoint.value()
         self.node.send_command_reliable(chamber, mode, setpoint)
 
+    def on_turbo_pid(self):
+        chamber = self.combo_chamber.currentIndex()
+        setpoint = float(self.spin_setpoint.value())
+        if chamber == CHAMBER_BLOCKED:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Turbo+PID inválido",
+                "Selecciona una camara (A, B o A+B) para usar Turbo+PID.",
+            )
+            return
+        if setpoint <= 0.0:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Turbo+PID inválido",
+                "El setpoint debe ser mayor a 0 kPa para inflado turbo.",
+            )
+            return
+        if setpoint > 80.0:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Turbo+PID inválido",
+                "Turbo+PID usa setpoint en kPa. Usa un valor en el rango 0-80 kPa.",
+            )
+            return
+        self.node.inflate_turbo(chamber, setpoint)
+
     def on_mode_changed(self, index: int):
-        if index in (3, 4):
+        mode = MODE_OPTIONS[index][1]
+        if mode in (MODE_PWM_INFLATE, MODE_PWM_SUCTION):
             # PWM
             self.spin_setpoint.setRange(0.0, 255.0)
             self.spin_setpoint.setDecimals(0)
@@ -439,11 +593,19 @@ class SoftBotGUI(QtWidgets.QMainWindow):
             os.makedirs(LOG_DIR, exist_ok=True)
             filename = time.strftime("gui_log_%Y%m%d_%H%M%S.csv")
             filepath = os.path.join(LOG_DIR, filename)
-            self.log_file = open(filepath, mode='w', newline='')
+            self.log_file = open(filepath, mode="w", newline="")
             self.log_writer = csv.writer(self.log_file)
-            self.log_writer.writerow([
-                'Timestamp_s', 'Setpoint', 'Feedback_kPa', 'PWM_Main', 'PWM_Aux', 'Mode', 'Error_kPa'
-            ])
+            self.log_writer.writerow(
+                [
+                    "Timestamp_s",
+                    "Setpoint",
+                    "Feedback_kPa",
+                    "PWM_Main",
+                    "PWM_Aux",
+                    "Mode",
+                    "Error_kPa",
+                ]
+            )
             self.btn_log.setText("Detener log")
         else:
             self.log_file.close()
@@ -476,5 +638,5 @@ def main():
     sys.exit(app.exec())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

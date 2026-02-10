@@ -5,13 +5,15 @@ Herramienta CLI para modificar los límites de presión del firmware
 sin necesidad de recompilar. Utiliza el tópico de Tuning Vectorial.
 """
 
-import sys
 import os
+import sys
 import time
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
+
 from sdk.softbot_interface import SoftBot
+
 
 def main():
     rclpy.init()
@@ -20,33 +22,33 @@ def main():
     print("\n🛡️  GESTOR DE LÍMITES DE SEGURIDAD (SoftBot v5.0)")
     print("-------------------------------------------------")
     print("Nota: Estos cambios son volátiles (se pierden al reiniciar el ESP32)")
-    
+
     try:
         while True:
-            print(f"\nConfiguración Actual (Cache):")
+            print("\nConfiguración Actual (Cache):")
             print(f"   Max: {bot.tuning_cache['max_safe']} kPa")
             print(f"   Min: {bot.tuning_cache['min_safe']} kPa")
-            
+
             print("\nOpciones:")
             print("   1. Modificar Límite MÁXIMO (Sobrepresión)")
             print("   2. Modificar Límite MÍNIMO (Vacío)")
             print("   3. Salir")
-            
+
             choice = input("Seleccione una opción: ")
-            
-            if choice == '1':
+
+            if choice == "1":
                 val = float(input("   Nuevo valor MÁXIMO (kPa): "))
                 bot.update_tuning(max_safe=val)
-                time.sleep(0.5) # Esperar propagación
+                time.sleep(0.5)  # Esperar propagación
                 print("   ✅ Comando enviado.")
-                
-            elif choice == '2':
+
+            elif choice == "2":
                 val = float(input("   Nuevo valor MÍNIMO (kPa): "))
                 bot.update_tuning(min_safe=val)
                 time.sleep(0.5)
                 print("   ✅ Comando enviado.")
-                
-            elif choice == '3':
+
+            elif choice == "3":
                 break
             else:
                 print("   ❌ Opción no válida.")
@@ -58,5 +60,6 @@ def main():
     finally:
         bot.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

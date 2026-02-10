@@ -17,5 +17,6 @@ python3 software/gui/softbot_gui.py
 ```
 
 Incluye controles de **BOOST** (tanque) para abrir/cerrar la válvula o enviar un pulso.
+Incluye botón recomendado **Inflar Turbo+PID** (modo 5 firmware).
 Incluye controles de **llenado de tanque** (modo 3) con setpoint configurable.
 Incluye **venteo** para liberar presión a atmósfera.
