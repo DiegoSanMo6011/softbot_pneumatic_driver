@@ -1,113 +1,156 @@
 # SoftBot Lab Platform v1.0
 
-SoftBot Lab Platform is a reproducible pneumatic robotics stack for ESP32 + ROS 2,
-prepared for daily laboratory use and generational handover.
+Plataforma reproducible para robots neumáticos suaves con ESP32 + ROS 2, lista para operación diaria en laboratorio y transferencia a futuras generaciones.
 
-## Scope
-- Official runtime platform: **Ubuntu 22.04 + ROS 2 Humble**
-- Deployment model: **Dual Boot Ubuntu + Windows**
-- Windows role: **complementary** (FEM/ANSYS/mechanics workflows)
-- micro-ROS agent: **Docker (official path)**
-- Firmware toolchain: **PlatformIO CLI (official path)**
+## Alcance oficial
+- Runtime oficial de control: **Ubuntu 22.04 + ROS 2 Humble**
+- Despliegue de laboratorio: **Dual Boot Ubuntu + Windows**
+- Rol de Windows: **complementario** (ANSYS/FEM/mecánica), no runtime principal de control
+- micro-ROS Agent: **Docker**
+- Toolchain de firmware: **PlatformIO CLI**
+- Contrato de operación: **`labctl <subcomando>`**
 
-## Quick start (Linux official flow)
-1. Install platform dependencies (online):
+## Instalación en computadora nueva (online, 1 comando)
+Estos pasos son para dejar una máquina lista desde cero.
+
+### 1) Clonar repositorio
+```bash
+git clone <URL_DEL_REPO>
+cd softbot_pneumatic_driver
+```
+
+### 2) Instalar dependencias de plataforma
 ```bash
 ./scripts/install_lab.sh --online
 ```
-2. Validate environment:
+
+### 3) Abrir nueva terminal y cargar ROS 2
 ```bash
+source /opt/ros/humble/setup.bash
 ./scripts/labctl doctor --profile default
 ```
-3. Build firmware:
+
+Notas:
+- Si el instalador agregó tu usuario al grupo `docker`, necesitas nueva sesión de terminal.
+- `doctor` puede marcar `Serial devices: none` si no hay ESP32 conectado; eso es esperado.
+
+## Validación rápida sin hardware (sin ESP32)
+Úsalo antes de tocar el hardware del laboratorio.
+
+```bash
+./scripts/test_no_hw.sh
+./scripts/tester_report.sh
+```
+
+Se generan logs y reportes en `experiments/logs/ops/`.
+
+## Flujo completo con ESP32 conectada
+Reemplaza el puerto si tu equipo usa otro (`/dev/ttyACM0`, etc.).
+
+### 1) Compilar firmware
 ```bash
 ./scripts/labctl firmware build --profile default
 ```
-4. Flash firmware:
+
+### 2) Flashear firmware
 ```bash
 ./scripts/labctl firmware flash --profile default --port /dev/ttyUSB0
 ```
-5. Start micro-ROS agent:
+
+### 3) Levantar micro-ROS Agent
 ```bash
 ./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
 ```
-6. Start GUI:
+
+### 4) Abrir GUI
 ```bash
 ./scripts/labctl gui start
 ```
-7. Run smoke test:
+
+### 5) Ejecutar smoke test seguro
 ```bash
 ./scripts/labctl smoke --profile default
 ```
-8. (Optional) test a single hardware component:
+
+### 6) Probar componentes de hardware de forma independiente
+Ejemplo de prueba puntual:
 ```bash
-./scripts/labctl hardware test --component inflate_main --pwm 120 --duration-s 1.0
+./scripts/labctl hardware test --component inflate_main --pwm 120 --duration-s 1.0 --repeat 1
 ```
-9. Stop started processes/containers:
+
+Panel interactivo para diagnóstico:
+```bash
+./scripts/labctl hardware panel --pwm 120
+```
+
+Apagado forzado de salidas:
+```bash
+./scripts/labctl hardware off
+```
+
+### 7) Detener procesos y contenedores lanzados por la CLI
 ```bash
 ./scripts/labctl stop
 ```
 
-## Offline bootstrap
-To prepare a reusable offline bundle on a machine with internet:
+## Instalación offline (sin internet)
+En una máquina con internet:
 ```bash
 ./scripts/create_offline_bundle.sh
 ```
-Then install offline on lab machine:
+
+En la máquina objetivo sin internet:
 ```bash
-./scripts/install_lab.sh --offline /path/to/offline_bundle_YYYYMMDD_HHMMSS.tar.gz
+./scripts/install_lab.sh --offline /ruta/al/offline_bundle_YYYYMMDD_HHMMSS.tar.gz
 ```
 
-## Software-only validation (no ESP32 required)
-Run this from your laptop before touching lab hardware:
+## Flujo para tester externo (rápido)
+Para un colega que solo validará la plataforma:
 ```bash
-./scripts/test_no_hw.sh
-```
-
-Tester-friendly automated report:
-```bash
+./scripts/install_lab.sh --online
 ./scripts/tester_report.sh
 ```
 
-## Main interfaces
-- CLI contract: `labctl <subcommand>`
-- Profile contract: `config/profiles/*.json`
-- Firmware entry: `firmware/softbot_controller/softbot_controller.ino`
-
-## Repository map
-```text
-config/profiles/          Platform hardware/runtime profiles (JSON)
-docs/                     Institutional docs (ES/EN)
-firmware/                 ESP32 firmware + PlatformIO project
-scripts/                  Installer, offline bundle creator, labctl wrapper
-software/cli/             labctl implementation
-software/sdk/             Python SDK for ROS topics
-software/gui/             Real-time GUI
-software/ejemplos/        Operational examples
-software/tools/           Validation/calibration/smoke scripts
-experiments/              Experimental datasets and operational logs
+Con hardware:
+```bash
+./scripts/tester_report.sh --with-hardware --port /dev/ttyUSB0 --baud 115200
 ```
 
-## Documentation hub
-- `docs/setup_lab_pc_dualboot_es.md`
-- `docs/setup_lab_pc_dualboot_en.md`
+Guía detallada: `docs/tester_guide_es.md`
+
+## Mapa del repositorio
+```text
+config/profiles/          Perfiles de plataforma (JSON)
+docs/                     Documentación institucional (ES/EN)
+firmware/                 Firmware ESP32 + PlatformIO
+scripts/                  Instalador, offline bundle, wrapper labctl
+software/cli/             Implementación de labctl
+software/sdk/             SDK Python (ROS 2 topics)
+software/gui/             GUI de operación en tiempo real
+software/ejemplos/        Ejemplos operativos legacy/actuales
+software/tools/           Smoke tests, diagnóstico y utilidades
+experiments/              Datos experimentales y logs operativos
+```
+
+## Documentación principal
 - `docs/installation_quickstart_es.md`
 - `docs/installation_quickstart_en.md`
 - `docs/operations_runbook_es.md`
 - `docs/operations_runbook_en.md`
+- `docs/setup_lab_pc_dualboot_es.md`
+- `docs/setup_lab_pc_dualboot_en.md`
+- `docs/hardware_diagnostics.md`
 - `docs/maintenance_handover_es.md`
 - `docs/maintenance_handover_en.md`
-- `docs/legacy_compatibility.md`
 - `docs/release_checklist.md`
-- `docs/hardware_diagnostics.md`
-- `docs/tester_guide_es.md`
 
-## Release policy
-- Stable branch: `main`
-- Versioning: semantic tags `vX.Y.Z`
-- Release gate: checklist + smoke tests + CI green
+## Política de release
+- Rama estable: `main`
+- Versionado: tags semánticos `vX.Y.Z`
+- Gate de release: checklist + smoke tests + CI en verde
 
-## Notes for future engineers
-- Linux is the official control runtime. Keep Windows for simulation/analysis tooling.
-- Keep profiles in JSON and avoid hardcoded machine-specific paths in source files.
-- Preserve backward compatibility for legacy scripts under `software/ejemplos/`.
+## Notas para futuras generaciones
+- Mantener Linux como runtime oficial de control.
+- Mantener Windows para simulación/análisis (ANSYS/FEM), no control en tiempo real.
+- Mantener perfiles versionados en `config/profiles/*.json`.
+- Evitar rutas hardcodeadas por máquina.
