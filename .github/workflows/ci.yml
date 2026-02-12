@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: ["main", "experimentacion_sync", "experimentacion"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff
+
+      - name: Python syntax check
+        run: |
+          python -m py_compile $(find software -type f -name "*.py")
+
+      - name: Ruff lint
+        run: |
+          ruff check software
+
+      - name: Ruff format check
+        run: |
+          ruff format --check software
+
+      - name: Validate profile JSON schema keys
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          required = [
+              ("firmware", "board"),
+              ("firmware", "upload_port"),
+              ("firmware", "baud"),
+              ("agent", "serial_dev"),
+              ("agent", "baud"),
+              ("safety", "max_kpa"),
+              ("safety", "min_kpa"),
+              ("locomotion", "default_strategy"),
+              ("paths", "experiments_dir"),
+          ]
+
+          profiles = sorted(Path("config/profiles").glob("*.json"))
+          assert profiles, "No profiles found in config/profiles"
+
+          for profile_path in profiles:
+              data = json.loads(profile_path.read_text(encoding="utf-8"))
+              for key_a, key_b in required:
+                  if key_a not in data or key_b not in data[key_a]:
+                      raise SystemExit(
+                          f"Missing key {key_a}.{key_b} in {profile_path}"
+                      )
+          print("Profile validation passed")
+          PY

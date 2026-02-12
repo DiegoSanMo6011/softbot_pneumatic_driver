@@ -4,7 +4,7 @@
  * @details
  * - Lógica Híbrida Agresiva: Si faltan > 5 kPa, PWM = 255 a TODO.
  * - Sin suavizado PID hasta el último momento.
- * - Hardware: 4 Bombas activas (Inflado Aux en PIN 5).
+ * - Hardware: 4 Bombas activas.
  */
 
 #include <Arduino.h>
@@ -20,6 +20,7 @@
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/int8.h>
+#include <std_msgs/msg/int16.h>
 #include <std_msgs/msg/int16_multi_array.h>
 
 // ==========================================
@@ -27,7 +28,7 @@
 // ==========================================
 const int PIN_VALVE_INFLATE = 25;
 const int PIN_VALVE_SUCTION = 26;
-const int PIN_VALVE_BOOST = 23; // AJUSTA segun tu conexion
+const int PIN_VALVE_BOOST = 23;
 const int PIN_MUX_CHAMBER_A = 32;
 const int PIN_MUX_CHAMBER_B = 33;
 
@@ -57,6 +58,18 @@ const int8_t MODE_PWM_SUCTION = -2;
 const int8_t MODE_TANK_FILL = 3;
 const int8_t MODE_VENT = 4;
 const int8_t MODE_PID_INFLATE_TURBO = 5;
+const int8_t MODE_HARDWARE_DIAGNOSTIC = 9;
+
+// Bitmask /hardware_test (modo 9)
+const uint16_t HW_PUMP_INFLATE_MAIN = (1 << 0);
+const uint16_t HW_PUMP_INFLATE_AUX = (1 << 1);
+const uint16_t HW_PUMP_SUCTION_MAIN = (1 << 2);
+const uint16_t HW_PUMP_SUCTION_AUX = (1 << 3);
+const uint16_t HW_VALVE_INFLATE = (1 << 4);
+const uint16_t HW_VALVE_SUCTION = (1 << 5);
+const uint16_t HW_VALVE_BOOST = (1 << 6);
+const uint16_t HW_MUX_CHAMBER_A = (1 << 7);
+const uint16_t HW_MUX_CHAMBER_B = (1 << 8);
 
 // UMBRALES DE AGRESIVIDAD
 // Si el error es mayor a esto, ignoramos el PID y damos 100%
@@ -113,6 +126,7 @@ int8_t tank_state = 0; // 0=idle, 1=filling, 2=full, 3=timeout
 const uint32_t TURBO_PREFILL_MS = 150;
 bool turbo_prefill_active = false;
 uint32_t turbo_prefill_start_ms = 0;
+uint16_t hardware_test_mask = 0;
 
 // ==========================================
 // 3. MICRO-ROS
@@ -127,6 +141,7 @@ rcl_subscription_t sub_mode;
 rcl_subscription_t sub_chamber;
 rcl_subscription_t sub_tuning;
 rcl_subscription_t sub_boost;
+rcl_subscription_t sub_hwtest;
 
 rcl_publisher_t pub_feedback;
 rcl_publisher_t pub_debug;
@@ -136,6 +151,7 @@ std_msgs__msg__Float32 msg_setpoint;
 std_msgs__msg__Int8 msg_mode;
 std_msgs__msg__Int8 msg_chamber;
 std_msgs__msg__Int8 msg_boost;
+std_msgs__msg__Int16 msg_hwtest;
 std_msgs__msg__Float32MultiArray msg_tuning;
 std_msgs__msg__Float32 msg_feedback;
 std_msgs__msg__Int16MultiArray msg_debug;
@@ -284,6 +300,10 @@ void cb_mode(const void *msgin) {
   if (mode_changed && control_mode == MODE_PID_INFLATE_TURBO) {
     resetTurboPrefill();
   }
+  if (mode_changed && control_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    hardware_test_mask = 0;
+    stopActuators();
+  }
 
   control_mode = m;
 
@@ -332,6 +352,14 @@ void cb_boost(const void *msgin) {
   boost_enabled = (b != 0);
 }
 
+void cb_hwtest(const void *msgin) {
+  if (emergency_stop_active) {
+    hardware_test_mask = 0;
+    return;
+  }
+  hardware_test_mask = (uint16_t)((const std_msgs__msg__Int16 *)msgin)->data;
+}
+
 // ==========================================
 // LOOP DE CONTROL
 // ==========================================
@@ -353,6 +381,41 @@ void controlLoop() {
     msg_debug.data.data = debug_data;
     msg_debug.data.size = 4;
     rcl_publish(&pub_debug, &msg_debug, NULL);
+    return;
+  }
+
+  if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
+
+    bool pump_inflate_main_on = (hardware_test_mask & HW_PUMP_INFLATE_MAIN) != 0;
+    bool pump_inflate_aux_on = (hardware_test_mask & HW_PUMP_INFLATE_AUX) != 0;
+    bool pump_suction_main_on = (hardware_test_mask & HW_PUMP_SUCTION_MAIN) != 0;
+    bool pump_suction_aux_on = (hardware_test_mask & HW_PUMP_SUCTION_AUX) != 0;
+
+    ledcWrite(CH_INFLATE_MAIN, pump_inflate_main_on ? pwm_diag : 0);
+    ledcWrite(CH_INFLATE_AUX, pump_inflate_aux_on ? pwm_diag : 0);
+    ledcWrite(CH_SUCCION_MAIN, pump_suction_main_on ? pwm_diag : 0);
+    ledcWrite(CH_SUCCION_AUX, pump_suction_aux_on ? pwm_diag : 0);
+
+    digitalWrite(PIN_VALVE_INFLATE, (hardware_test_mask & HW_VALVE_INFLATE) ? HIGH : LOW);
+    digitalWrite(PIN_VALVE_SUCTION, (hardware_test_mask & HW_VALVE_SUCTION) ? HIGH : LOW);
+    digitalWrite(PIN_VALVE_BOOST, (hardware_test_mask & HW_VALVE_BOOST) ? HIGH : LOW);
+    digitalWrite(PIN_MUX_CHAMBER_A, (hardware_test_mask & HW_MUX_CHAMBER_A) ? HIGH : LOW);
+    digitalWrite(PIN_MUX_CHAMBER_B, (hardware_test_mask & HW_MUX_CHAMBER_B) ? HIGH : LOW);
+
+    int16_t active_main = (pump_inflate_main_on || pump_suction_main_on) ? pwm_diag : 0;
+    int16_t active_aux = (pump_inflate_aux_on || pump_suction_aux_on) ? pwm_diag : 0;
+    debug_data[0] = active_main;
+    debug_data[1] = active_aux;
+    debug_data[2] = 0;
+    debug_data[3] = (int16_t)control_mode;
+    msg_debug.data.data = debug_data;
+    msg_debug.data.size = 4;
+    rcl_publish(&pub_debug, &msg_debug, NULL);
+
+    tank_state = 0;
+    msg_tank_state.data = tank_state;
+    rcl_publish(&pub_tank_state, &msg_tank_state, NULL);
     return;
   }
 
@@ -612,6 +675,8 @@ void setup() {
       "tuning_params"));
   RCCHECK(rclc_subscription_init_default(
       &sub_boost, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int8), "boost_valve"));
+  RCCHECK(rclc_subscription_init_default(
+      &sub_hwtest, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16), "hardware_test"));
 
   RCCHECK(rclc_publisher_init_default(&pub_feedback, &node,
                                       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
@@ -629,7 +694,7 @@ void setup() {
   msg_tuning.data.size = 6;
   msg_tuning.data.data = tuning_buffer;
 
-  RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
+  RCCHECK(rclc_executor_init(&executor, &support.context, 6, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_setpoint, &msg_setpoint, &cb_setpoint,
                                          ON_NEW_DATA));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_mode, &msg_mode, &cb_mode, ON_NEW_DATA));
@@ -639,6 +704,8 @@ void setup() {
       rclc_executor_add_subscription(&executor, &sub_tuning, &msg_tuning, &cb_tuning, ON_NEW_DATA));
   RCCHECK(
       rclc_executor_add_subscription(&executor, &sub_boost, &msg_boost, &cb_boost, ON_NEW_DATA));
+  RCCHECK(rclc_executor_add_subscription(&executor, &sub_hwtest, &msg_hwtest, &cb_hwtest,
+                                         ON_NEW_DATA));
 
   last_control_timestamp = millis();
 }

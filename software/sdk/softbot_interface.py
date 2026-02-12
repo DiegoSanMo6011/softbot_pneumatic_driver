@@ -13,12 +13,13 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16, Int16MultiArray
 
 try:
     from .protocol import (
         CHAMBER_AB,
         CHAMBER_BLOCKED,
+        MODE_HARDWARE_DIAGNOSTIC,
         MODE_PID_INFLATE,
         MODE_PID_INFLATE_TURBO,
         MODE_PID_SUCTION,
@@ -33,6 +34,7 @@ except ImportError:
     from protocol import (  # type: ignore
         CHAMBER_AB,
         CHAMBER_BLOCKED,
+        MODE_HARDWARE_DIAGNOSTIC,
         MODE_PID_INFLATE,
         MODE_PID_INFLATE_TURBO,
         MODE_PID_SUCTION,
@@ -55,6 +57,7 @@ class SoftBot(Node):
         self.TOPIC_SETPOINT = "/pressure_setpoint"
         self.TOPIC_TUNING = "/tuning_params"
         self.TOPIC_BOOST = "/boost_valve"
+        self.TOPIC_HARDWARE_TEST = "/hardware_test"
         self.TOPIC_TANK_STATE = "/tank_state"
         self.TOPIC_FEEDBACK = "/pressure_feedback"
         self.TOPIC_DEBUG = "/system_debug"
@@ -65,6 +68,7 @@ class SoftBot(Node):
         self.pub_setpoint = self.create_publisher(Float32, self.TOPIC_SETPOINT, 10)
         self.pub_tuning = self.create_publisher(Float32MultiArray, self.TOPIC_TUNING, 10)
         self.pub_boost = self.create_publisher(Int8, self.TOPIC_BOOST, 10)
+        self.pub_hwtest = self.create_publisher(Int16, self.TOPIC_HARDWARE_TEST, 10)
 
         # Subscribers
         self.sub_feedback = self.create_subscription(
@@ -227,6 +231,41 @@ class SoftBot(Node):
         self.set_boost(True)
         time.sleep(max(0.0, float(duration_s)))
         self.set_boost(False)
+
+    def set_hardware_test(
+        self,
+        bitmask: int,
+        pwm: int = 120,
+        repeats: int = 3,
+        interval_s: float = 0.03,
+    ):
+        """
+        Enter hardware diagnostic mode and apply output bitmask.
+
+        bitmask bits:
+          0 inflate_main, 1 inflate_aux, 2 suction_main, 3 suction_aux,
+          4 valve_inflate, 5 valve_suction, 6 valve_boost,
+          7 mux_A, 8 mux_B.
+        """
+        pwm = int(max(0, min(255, int(pwm))))
+        repeats = max(1, int(repeats))
+        interval_s = max(0.0, float(interval_s))
+
+        mode_msg = Int8(data=MODE_HARDWARE_DIAGNOSTIC)
+        setpoint_msg = Float32(data=float(pwm))
+        mask_msg = Int16(data=int(bitmask))
+
+        for i in range(repeats):
+            self.pub_mode.publish(mode_msg)
+            self.pub_setpoint.publish(setpoint_msg)
+            self.pub_hwtest.publish(mask_msg)
+            if i < repeats - 1:
+                time.sleep(interval_s)
+
+    def stop_hardware_test(self):
+        """Exit hardware diagnostic mode and stop all outputs."""
+        self.set_hardware_test(0, pwm=0, repeats=2, interval_s=0.02)
+        self.stop()
 
     def fill_tank(self, target_kpa: float):
         """Start tank fill mode with a kPa setpoint."""

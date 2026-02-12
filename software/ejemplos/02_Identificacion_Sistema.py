@@ -18,9 +18,10 @@ import rclpy
 from sdk.softbot_interface import SoftBot
 
 # --- PARÁMETROS DEL EXPERIMENTO ---
-STEP_SEQUENCE = list(range(0, 255, 25)) + [255]
+# Secuencia de setpoints fisicos en kPa para modo PID (inflate).
+STEP_SEQUENCE = [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0]
 # Para subir y bajar (triangular):
-# STEP_SEQUENCE = list(range(0, 255, 25)) + [255] + list(range(225, -1, -25))
+# STEP_SEQUENCE = [0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 35.0, 30.0, 25.0]
 
 STEP_DURATION = 3.0
 SAMPLING_RATE = 0.05

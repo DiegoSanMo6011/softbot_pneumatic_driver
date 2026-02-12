@@ -26,7 +26,7 @@ except Exception as exc:
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16, Int16MultiArray
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SOFTWARE_DIR = os.path.join(BASE_DIR, "software")
@@ -35,6 +35,16 @@ if SOFTWARE_DIR not in sys.path:
 
 from sdk.protocol import (  # noqa: E402
     CHAMBER_BLOCKED,
+    HW_MUX_CHAMBER_A,
+    HW_MUX_CHAMBER_B,
+    HW_PUMP_INFLATE_AUX,
+    HW_PUMP_INFLATE_MAIN,
+    HW_PUMP_SUCTION_AUX,
+    HW_PUMP_SUCTION_MAIN,
+    HW_VALVE_BOOST,
+    HW_VALVE_INFLATE,
+    HW_VALVE_SUCTION,
+    MODE_HARDWARE_DIAGNOSTIC,
     MODE_LABELS,
     MODE_PID_INFLATE,
     MODE_PID_INFLATE_TURBO,
@@ -54,6 +64,7 @@ MODE_OPTIONS = [
     ("-1 - PID Succión", MODE_PID_SUCTION),
     ("2 - PWM Inflado", MODE_PWM_INFLATE),
     ("-2 - PWM Succión", MODE_PWM_SUCTION),
+    ("9 - Hardware Diag", MODE_HARDWARE_DIAGNOSTIC),
 ]
 
 
@@ -67,6 +78,7 @@ class SoftBotNode(Node):
         self.topic_setpoint = "/pressure_setpoint"
         self.topic_tuning = "/tuning_params"
         self.topic_boost = "/boost_valve"
+        self.topic_hwtest = "/hardware_test"
         self.topic_tank_state = "/tank_state"
         self.topic_feedback = "/pressure_feedback"
         self.topic_debug = "/system_debug"
@@ -81,6 +93,7 @@ class SoftBotNode(Node):
             10,
         )
         self.pub_boost = self.create_publisher(Int8, self.topic_boost, 10)
+        self.pub_hwtest = self.create_publisher(Int16, self.topic_hwtest, 10)
 
         # --- Suscriptores ---
         self.sub_feedback = self.create_subscription(
@@ -223,6 +236,24 @@ class SoftBotNode(Node):
         if duration_ms > 0:
             QtCore.QTimer.singleShot(duration_ms, self.stop)
 
+    def hardware_test(self, bitmask: int, pwm: int, repeats: int = 3, interval_ms: int = 30):
+        mode_msg = Int8(data=MODE_HARDWARE_DIAGNOSTIC)
+        setpoint_msg = Float32(data=float(max(0, min(255, int(pwm)))))
+        mask_msg = Int16(data=int(bitmask))
+        self.pub_mode.publish(mode_msg)
+        self.pub_setpoint.publish(setpoint_msg)
+        self.pub_hwtest.publish(mask_msg)
+        for i in range(1, max(1, int(repeats))):
+            QtCore.QTimer.singleShot(interval_ms * i, lambda m=mode_msg: self.pub_mode.publish(m))
+            QtCore.QTimer.singleShot(
+                interval_ms * i,
+                lambda s=setpoint_msg: self.pub_setpoint.publish(s),
+            )
+            QtCore.QTimer.singleShot(
+                interval_ms * i,
+                lambda h=mask_msg: self.pub_hwtest.publish(h),
+            )
+
 
 class SoftBotGUI(QtWidgets.QMainWindow):
     def __init__(self, node: SoftBotNode):
@@ -329,6 +360,43 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         boost_layout.addRow("Duración", self.spin_boost_ms)
         boost_layout.addRow(btn_boost_pulse)
 
+        # --- Hardware diag ---
+        hw_box = QtWidgets.QGroupBox("Hardware test (componentes)")
+        hw_layout = QtWidgets.QGridLayout(hw_box)
+
+        self.cb_hw_inflate_main = QtWidgets.QCheckBox("Pump Inflate Main")
+        self.cb_hw_inflate_aux = QtWidgets.QCheckBox("Pump Inflate Aux")
+        self.cb_hw_suction_main = QtWidgets.QCheckBox("Pump Suction Main")
+        self.cb_hw_suction_aux = QtWidgets.QCheckBox("Pump Suction Aux")
+        self.cb_hw_valve_inflate = QtWidgets.QCheckBox("Valve Inflate")
+        self.cb_hw_valve_suction = QtWidgets.QCheckBox("Valve Suction")
+        self.cb_hw_valve_boost = QtWidgets.QCheckBox("Valve Boost")
+        self.cb_hw_mux_a = QtWidgets.QCheckBox("Mux A")
+        self.cb_hw_mux_b = QtWidgets.QCheckBox("Mux B")
+
+        self.spin_hw_pwm = QtWidgets.QSpinBox()
+        self.spin_hw_pwm.setRange(0, 255)
+        self.spin_hw_pwm.setValue(120)
+
+        btn_hw_apply = QtWidgets.QPushButton("Aplicar HW Test")
+        btn_hw_off = QtWidgets.QPushButton("HW OFF")
+        btn_hw_apply.clicked.connect(self.on_hw_apply)
+        btn_hw_off.clicked.connect(self.on_hw_off)
+
+        hw_layout.addWidget(self.cb_hw_inflate_main, 0, 0)
+        hw_layout.addWidget(self.cb_hw_inflate_aux, 0, 1)
+        hw_layout.addWidget(self.cb_hw_suction_main, 1, 0)
+        hw_layout.addWidget(self.cb_hw_suction_aux, 1, 1)
+        hw_layout.addWidget(self.cb_hw_valve_inflate, 2, 0)
+        hw_layout.addWidget(self.cb_hw_valve_suction, 2, 1)
+        hw_layout.addWidget(self.cb_hw_valve_boost, 3, 0)
+        hw_layout.addWidget(self.cb_hw_mux_a, 3, 1)
+        hw_layout.addWidget(self.cb_hw_mux_b, 4, 0)
+        hw_layout.addWidget(QtWidgets.QLabel("PWM"), 4, 1)
+        hw_layout.addWidget(self.spin_hw_pwm, 4, 2)
+        hw_layout.addWidget(btn_hw_apply, 5, 0, 1, 2)
+        hw_layout.addWidget(btn_hw_off, 5, 2, 1, 1)
+
         # --- Tuning ---
         tuning_box = QtWidgets.QGroupBox("Tuning rápido")
         tuning_layout = QtWidgets.QFormLayout(tuning_box)
@@ -393,6 +461,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         control_panel.addWidget(tank_box)
         control_panel.addWidget(vent_box)
         control_panel.addWidget(boost_box)
+        control_panel.addWidget(hw_box)
         control_panel.addWidget(self.label_status)
         control_panel.addStretch(1)
 
@@ -517,7 +586,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
 
     def on_mode_changed(self, index: int):
         mode = MODE_OPTIONS[index][1]
-        if mode in (MODE_PWM_INFLATE, MODE_PWM_SUCTION):
+        if mode in (MODE_PWM_INFLATE, MODE_PWM_SUCTION, MODE_HARDWARE_DIAGNOSTIC):
             # PWM
             self.spin_setpoint.setRange(0.0, 255.0)
             self.spin_setpoint.setDecimals(0)
@@ -577,6 +646,37 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.boost_enabled = False
         self.btn_boost.setChecked(False)
         self.btn_boost.setText("BOOST: OFF")
+
+    def _hardware_mask_from_ui(self) -> int:
+        mask = 0
+        if self.cb_hw_inflate_main.isChecked():
+            mask |= HW_PUMP_INFLATE_MAIN
+        if self.cb_hw_inflate_aux.isChecked():
+            mask |= HW_PUMP_INFLATE_AUX
+        if self.cb_hw_suction_main.isChecked():
+            mask |= HW_PUMP_SUCTION_MAIN
+        if self.cb_hw_suction_aux.isChecked():
+            mask |= HW_PUMP_SUCTION_AUX
+        if self.cb_hw_valve_inflate.isChecked():
+            mask |= HW_VALVE_INFLATE
+        if self.cb_hw_valve_suction.isChecked():
+            mask |= HW_VALVE_SUCTION
+        if self.cb_hw_valve_boost.isChecked():
+            mask |= HW_VALVE_BOOST
+        if self.cb_hw_mux_a.isChecked():
+            mask |= HW_MUX_CHAMBER_A
+        if self.cb_hw_mux_b.isChecked():
+            mask |= HW_MUX_CHAMBER_B
+        return mask
+
+    def on_hw_apply(self):
+        mask = self._hardware_mask_from_ui()
+        pwm = int(self.spin_hw_pwm.value())
+        self.node.hardware_test(mask, pwm)
+
+    def on_hw_off(self):
+        self.node.hardware_test(0, 0, repeats=2, interval_ms=20)
+        self.node.stop()
 
     def on_tuning(self):
         self.node.update_tuning(

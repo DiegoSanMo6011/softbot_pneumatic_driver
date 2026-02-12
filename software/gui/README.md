@@ -20,3 +20,5 @@ Incluye controles de **BOOST** (tanque) para abrir/cerrar la válvula o enviar u
 Incluye botón recomendado **Inflar Turbo+PID** (modo 5 firmware).
 Incluye controles de **llenado de tanque** (modo 3) con setpoint configurable.
 Incluye **venteo** para liberar presión a atmósfera.
+Incluye panel **Hardware test (componentes)** para activar bombas/válvulas/mux individualmente
+en modo 9 de firmware.
