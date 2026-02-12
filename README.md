@@ -15,7 +15,7 @@ Estos pasos son para dejar una máquina lista desde cero.
 
 ### 1) Clonar repositorio
 ```bash
-git clone <URL_DEL_REPO>
+git clone https://github.com/DiegoSanMo6011/softbot_pneumatic_driver.git
 cd softbot_pneumatic_driver
 ```
 
