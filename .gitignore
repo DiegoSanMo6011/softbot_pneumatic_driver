@@ -33,3 +33,13 @@ dist/
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Lab platform runtime artifacts
+offline_bundle_*/
+offline_bundle_*.tar.gz
+experiments/logs/ops/*.log
+experiments/logs/ops/labctl_state.json
+experiments/logs/ops/labctl_events.log
+experiments/logs/ops/ros/
+experiments/logs/ops/tester_report_*.md
+experiments/logs/ops/tester_run_*/

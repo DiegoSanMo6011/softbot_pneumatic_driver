@@ -38,6 +38,8 @@ software/
   Incluye control de **BOOST** via `/boost_valve`.
   Incluye llenado de tanque (modo 3) y lectura de `/tank_state`.
   Incluye **venteo** (modo 4) para liberar presión a atmósfera.
+  Incluye diagnóstico por componente (modo 9) via `set_hardware_test(bitmask, pwm)`.
+  Incluye `stop_hardware_test()` para apagar salidas de diagnóstico.
 
 - **`ejemplos/`**  
   Conjunto de scripts listos para ejecución directa que demuestran distintos modos de operación y validación del sistema.

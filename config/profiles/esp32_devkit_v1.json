@@ -1,0 +1,22 @@
+{
+  "profile_name": "esp32_devkit_v1",
+  "firmware": {
+    "board": "esp32dev",
+    "upload_port": "/dev/ttyUSB0",
+    "baud": 115200
+  },
+  "agent": {
+    "serial_dev": "/dev/ttyUSB0",
+    "baud": 115200
+  },
+  "safety": {
+    "max_kpa": 55.0,
+    "min_kpa": -60.0
+  },
+  "locomotion": {
+    "default_strategy": "SYNC_AB"
+  },
+  "paths": {
+    "experiments_dir": "experiments"
+  }
+}

@@ -1,90 +1,113 @@
-# SoftBot Pneumatic Driver — RoboSoft inPipe Locomotion (Competencia)
+# SoftBot Lab Platform v1.0
 
-> **Sistema neumático en lazo cerrado para locomoción en robots blandos (SoftBot).**
-> Este repositorio contiene firmware, software de alto nivel, experimentos y documentación
-> orientada a la competencia **RoboSoft – inPipe Locomotion**.
+SoftBot Lab Platform is a reproducible pneumatic robotics stack for ESP32 + ROS 2,
+prepared for daily laboratory use and generational handover.
 
-## 1. Resumen
-El proyecto integra:
-- **Firmware en ESP32** con micro-ROS para control neumático en lazo cerrado.
-- **SDK en Python (ROS 2)** para teleoperación, experimentación y tuning.
-- **Scripts de locomoción** (incluye salto y caminata alternada).
-- **GUI de escritorio** para telemetría en tiempo real y debugging.
-- **Modo 5 Turbo pre-PID** para inflado rápido y transición automática a PID.
-- **Datos de experimentación** y documentación técnica.
+## Scope
+- Official runtime platform: **Ubuntu 22.04 + ROS 2 Humble**
+- Deployment model: **Dual Boot Ubuntu + Windows**
+- Windows role: **complementary** (FEM/ANSYS/mechanics workflows)
+- micro-ROS agent: **Docker (official path)**
+- Firmware toolchain: **PlatformIO CLI (official path)**
 
-## 2. Estructura del repositorio
-```
-firmware/
-software/
-  sdk/
-  locomotion/
-  tools/
-  gui/
-  ejemplos/
-experiments/
-  2026-01/
-  logs/
-docs/
-hardware/
-  pneumatica/
-media/
-```
-
-## 3. Quick Start
-### 3.1 Firmware (ESP32)
-Código principal en:
-```
-firmware/softbot_controller/softbot_controller.ino
-```
-Requiere PlatformIO o Arduino IDE 2.0+ y la librería `micro_ros_arduino`.
-
-### 3.2 Agente micro-ROS (PC)
-Ejecuta el agente:
+## Quick start (Linux official flow)
+1. Install platform dependencies (online):
 ```bash
-docker run -it --rm -v /dev:/dev --privileged --net=host microros/micro-ros-agent:humble serial --dev /dev/ttyUSB0 -b 115200
+./scripts/install_lab.sh --online
 ```
-
-### 3.3 SDK y ejemplos (Python)
+2. Validate environment:
 ```bash
-source /opt/ros/humble/setup.bash
-cd software/ejemplos
-python3 01_Locomocion_Gusano.py
+./scripts/labctl doctor --profile default
 ```
-
-### 3.4 Locomoción de competencia (X-CRABS)
-Script principal:
-```
-software/locomotion/x_crabs.py
-```
-
-### 3.5 GUI en tiempo real
-Instrucciones completas en:
-```
-docs/gui.md
-```
-
-## 4. Documentación (todo en español)
-- `docs/arquitectura.md` — arquitectura de control, tópicos ROS 2 y seguridad
-- `docs/locomocion.md` — estrategias de locomoción y parámetros clave
-- `docs/experimentos.md` — estructura y uso de datos experimentales
-- `docs/gui.md` — GUI de escritorio en tiempo real
-- `docs/neumatica.md` — esquema neumático y diagrama actualizado
-- `docs/competencia_inpipe.md` — checklist y objetivos para RoboSoft
-- `docs/prueba_turbo.md` — guía de prueba del tanque BOOST
-
-## 5. Datos experimentales
-Los CSV históricos están en `experiments/2026-01/` y los nuevos logs se guardan en
-carpetas por mes: `experiments/YYYY-MM/`.
-
-## 6. Video de demo
-[![SoftBot Pneumatic Driver – Video de Demostración](https://img.youtube.com/vi/uC6NLilY3fU/0.jpg)](https://youtu.be/uC6NLilY3fU)
-
-## 7. Calidad de código
-Validaciones recomendadas:
+3. Build firmware:
 ```bash
-python3 -m py_compile $(find software -type f -name "*.py")
-ruff check software
-ruff format --check software
-clang-format --dry-run --Werror firmware/softbot_controller/softbot_controller.ino
+./scripts/labctl firmware build --profile default
 ```
+4. Flash firmware:
+```bash
+./scripts/labctl firmware flash --profile default --port /dev/ttyUSB0
+```
+5. Start micro-ROS agent:
+```bash
+./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
+```
+6. Start GUI:
+```bash
+./scripts/labctl gui start
+```
+7. Run smoke test:
+```bash
+./scripts/labctl smoke --profile default
+```
+8. (Optional) test a single hardware component:
+```bash
+./scripts/labctl hardware test --component inflate_main --pwm 120 --duration-s 1.0
+```
+9. Stop started processes/containers:
+```bash
+./scripts/labctl stop
+```
+
+## Offline bootstrap
+To prepare a reusable offline bundle on a machine with internet:
+```bash
+./scripts/create_offline_bundle.sh
+```
+Then install offline on lab machine:
+```bash
+./scripts/install_lab.sh --offline /path/to/offline_bundle_YYYYMMDD_HHMMSS.tar.gz
+```
+
+## Software-only validation (no ESP32 required)
+Run this from your laptop before touching lab hardware:
+```bash
+./scripts/test_no_hw.sh
+```
+
+Tester-friendly automated report:
+```bash
+./scripts/tester_report.sh
+```
+
+## Main interfaces
+- CLI contract: `labctl <subcommand>`
+- Profile contract: `config/profiles/*.json`
+- Firmware entry: `firmware/softbot_controller/softbot_controller.ino`
+
+## Repository map
+```text
+config/profiles/          Platform hardware/runtime profiles (JSON)
+docs/                     Institutional docs (ES/EN)
+firmware/                 ESP32 firmware + PlatformIO project
+scripts/                  Installer, offline bundle creator, labctl wrapper
+software/cli/             labctl implementation
+software/sdk/             Python SDK for ROS topics
+software/gui/             Real-time GUI
+software/ejemplos/        Operational examples
+software/tools/           Validation/calibration/smoke scripts
+experiments/              Experimental datasets and operational logs
+```
+
+## Documentation hub
+- `docs/setup_lab_pc_dualboot_es.md`
+- `docs/setup_lab_pc_dualboot_en.md`
+- `docs/installation_quickstart_es.md`
+- `docs/installation_quickstart_en.md`
+- `docs/operations_runbook_es.md`
+- `docs/operations_runbook_en.md`
+- `docs/maintenance_handover_es.md`
+- `docs/maintenance_handover_en.md`
+- `docs/legacy_compatibility.md`
+- `docs/release_checklist.md`
+- `docs/hardware_diagnostics.md`
+- `docs/tester_guide_es.md`
+
+## Release policy
+- Stable branch: `main`
+- Versioning: semantic tags `vX.Y.Z`
+- Release gate: checklist + smoke tests + CI green
+
+## Notes for future engineers
+- Linux is the official control runtime. Keep Windows for simulation/analysis tooling.
+- Keep profiles in JSON and avoid hardcoded machine-specific paths in source files.
+- Preserve backward compatibility for legacy scripts under `software/ejemplos/`.

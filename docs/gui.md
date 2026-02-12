@@ -58,6 +58,15 @@ python3 software/gui/softbot_gui.py
 ## 5.4 Controles de venteo
 - **Ventear**: abre A->R para liberar presion durante un tiempo configurable.
 
+## 5.5 Panel de diagnóstico por componente (modo 9)
+- Sección **Hardware test (componentes)** permite activar salidas individuales:
+  - Bombas: `inflate_main`, `inflate_aux`, `suction_main`, `suction_aux`
+  - Válvulas: `valve_inflate`, `valve_suction`, `valve_boost`
+  - Mux: `mux_a`, `mux_b`
+- Usa **PWM** para intensidad de bombas (0-255).
+- **Aplicar HW Test** publica modo `9` + bitmask en `/hardware_test`.
+- **HW OFF** apaga salidas y vuelve a estado seguro.
+
 ## 6. Logging
 Los logs de GUI se guardan en:
 ```

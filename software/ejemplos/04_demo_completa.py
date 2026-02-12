@@ -206,14 +206,14 @@ def main():
         print("1.1 Inflado Manual 50%")
         esperar_usuario()
         bot.set_chamber(1)
-        bot.set_pwm(2, 128)
+        bot.set_pwm(128, 2)
         monitor_loop(bot, 5, "1.1 HARDWARE: Inflado 50%")
         bot.stop()
 
         print("\n1.2 Succión TURBO 100%")
         esperar_usuario()
         bot.set_chamber(1)
-        bot.set_pwm(-2, 255)
+        bot.set_pwm(255, -2)
         monitor_loop(bot, 5, "1.2 HARDWARE: Turbo Succion 100%")
         bot.stop()
 
