@@ -10,6 +10,36 @@ Plataforma reproducible para robots neumáticos suaves con ESP32 + ROS 2, lista 
 - Toolchain de firmware: **PlatformIO CLI**
 - Contrato de operación: **`labctl <subcomando>`**
 
+## Recursos y permisos que usa la plataforma
+- Puerto serial para ESP32: `/dev/ttyUSB*` o `/dev/ttyACM*` (acceso exclusivo).
+- Daemon de Docker (`/var/run/docker.sock`) para levantar el micro-ROS Agent.
+- Grupos de usuario requeridos: `docker`, `dialout` y opcionalmente `uucp`.
+- `docker` permite ejecutar contenedores sin `sudo`.
+- `dialout`/`uucp` permite acceder al puerto serial.
+- ROS 2 Humble instalado en `/opt/ros/humble/`.
+- Logs operativos en `experiments/logs/ops/`.
+- Contenedor usado por `labctl agent start`: `softbot_microros_agent` con `--net=host`, `--privileged` y `-v /dev:/dev`.
+
+## Orden oficial de comandos (operación diaria con ESP32)
+Ejecuta esta secuencia en este orden:
+
+```bash
+cd ~/softbot_pneumatic_driver
+source /opt/ros/humble/setup.bash
+./scripts/labctl doctor --profile default
+./scripts/labctl firmware build --profile default
+./scripts/labctl firmware flash --profile default --port /dev/ttyUSB0
+./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
+./scripts/labctl gui start
+./scripts/labctl smoke --profile default
+./scripts/labctl stop
+```
+
+Notas de operación:
+- Flashea **antes** de levantar el agent.
+- Si el agent está corriendo, el puerto serial queda ocupado para comunicación ROS.
+- `labctl stop` libera procesos y contenedores iniciados por la CLI.
+
 ## Instalación en computadora nueva (online, 1 comando)
 Estos pasos son para dejar una máquina lista desde cero.
 
@@ -32,6 +62,7 @@ source /opt/ros/humble/setup.bash
 
 Notas:
 - Si el instalador agregó tu usuario al grupo `docker`, necesitas nueva sesión de terminal.
+- Si el instalador agregó tu usuario a `dialout`/`uucp`, también necesitas nueva sesión.
 - `doctor` puede marcar `Serial devices: none` si no hay ESP32 conectado; eso es esperado.
 
 ## Validación rápida sin hardware (sin ESP32)
@@ -109,6 +140,24 @@ Detener procesos lanzados por esta plataforma:
 ```bash
 ./scripts/labctl stop
 ```
+
+### 6) `permission denied ... /var/run/docker.sock` al levantar agent
+La sesión actual no tiene permisos efectivos del grupo `docker`.
+
+Verificar sesión y socket:
+```bash
+id -nG
+ls -l /var/run/docker.sock
+```
+
+Aplicar permisos y refrescar sesión:
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+docker info
+```
+
+Si sigue fallando, cerrar sesión de escritorio y volver a entrar.
 
 ## Flujo completo con ESP32 conectada
 Reemplaza el puerto si tu equipo usa otro (`/dev/ttyACM0`, etc.).
