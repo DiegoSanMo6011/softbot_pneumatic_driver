@@ -138,6 +138,7 @@ experiments/              Datos experimentales y logs operativos
 - `docs/operations_runbook_es.md`
 - `docs/operations_runbook_en.md`
 - `docs/setup_lab_pc_dualboot_es.md`
+- `docs/dualboot_step_by_step_es.md`
 - `docs/setup_lab_pc_dualboot_en.md`
 - `docs/hardware_diagnostics.md`
 - `docs/maintenance_handover_es.md`

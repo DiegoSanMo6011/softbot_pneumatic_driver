@@ -4,6 +4,10 @@
 Instalar Ubuntu 22.04 LTS junto a Windows sin comprometer el uso principal de
 ANSYS/FEM en Windows.
 
+## Guía detallada
+Para instalación completa con checklist de ejecución y troubleshooting:
+- `docs/dualboot_step_by_step_es.md`
+
 ## Recomendacion de particionado
 - Espacio total Linux recomendado: **80-120 GB**
 - `root` (`/`, ext4): 55 GB
