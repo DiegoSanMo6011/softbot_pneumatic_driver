@@ -44,6 +44,72 @@ Notas:
 
 Se generan logs y reportes en `experiments/logs/ops/`.
 
+## Troubleshooting rápido (doctor/instalación)
+### 1) `[FAIL] Serial devices: none`
+Sin ESP32 conectada: **esperado**.
+
+Con ESP32 conectada:
+```bash
+ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+```
+Si no aparece nada, revisar cable USB (datos), puerto físico y reconectar.
+
+### 2) `[FAIL] Docker daemon: not reachable`
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+newgrp docker
+docker info
+```
+Si sigue fallando:
+```bash
+sudo systemctl status docker --no-pager
+sudo journalctl -u docker -n 60 --no-pager
+```
+
+### 3) `bash: /opt/ros/humble/setup.bash: No such file or directory`
+ROS 2 Humble no está instalado. Reintentar instalación:
+```bash
+./scripts/install_lab.sh --online
+```
+
+### 4) `E: Unable to locate package docker-compose-plugin`
+Actualiza repo y reintenta. El instalador actual ya incluye fallback automático para
+`docker-compose-v2` o `docker-compose`:
+```bash
+git pull
+./scripts/install_lab.sh --online
+```
+
+### 5) `Could not open /dev/ttyUSB0 ... Permission denied` al flashear
+El firmware compila, pero el usuario no tiene permisos de acceso al puerto serial.
+
+Verificar permisos/grupos:
+```bash
+ls -l /dev/ttyUSB0
+groups
+```
+
+Agregar usuario a grupos serial (Ubuntu normalmente usa `dialout`):
+```bash
+sudo usermod -aG dialout $USER
+sudo usermod -aG uucp $USER 2>/dev/null || true
+```
+
+Cerrar sesión y volver a entrar. Luego reintentar:
+```bash
+./scripts/labctl firmware flash --profile default --port /dev/ttyUSB0
+```
+
+Si sigue ocupado el puerto, detectar proceso bloqueando:
+```bash
+lsof /dev/ttyUSB0
+```
+Detener procesos lanzados por esta plataforma:
+```bash
+./scripts/labctl stop
+```
+
 ## Flujo completo con ESP32 conectada
 Reemplaza el puerto si tu equipo usa otro (`/dev/ttyACM0`, etc.).
 

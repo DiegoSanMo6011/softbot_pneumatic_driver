@@ -155,6 +155,31 @@ install_docker_online() {
   fi
 }
 
+add_user_to_group_if_exists() {
+  local user_name="$1"
+  local group_name="$2"
+  if ! getent group "$group_name" >/dev/null 2>&1; then
+    return
+  fi
+  if id -nG "$user_name" | grep -qw "$group_name"; then
+    log "User $user_name already in $group_name group"
+    return
+  fi
+  log "Adding $user_name to $group_name group"
+  if [[ -n "$SUDO_CMD" ]]; then
+    $SUDO_CMD usermod -aG "$group_name" "$user_name"
+  else
+    usermod -aG "$group_name" "$user_name"
+  fi
+  log "Re-login required for $group_name group changes"
+}
+
+configure_serial_permissions() {
+  local target_user="${SUDO_USER:-$USER}"
+  add_user_to_group_if_exists "$target_user" "dialout"
+  add_user_to_group_if_exists "$target_user" "uucp"
+}
+
 install_ros2_humble_online() {
   if [[ -f /opt/ros/humble/setup.bash ]]; then
     log "ROS 2 Humble already installed"
@@ -262,12 +287,14 @@ main() {
   if [[ "$MODE" == "online" ]]; then
     install_base_packages_online
     install_docker_online
+    configure_serial_permissions
     install_ros2_humble_online
     setup_python_env
   else
     local bundle_dir
     bundle_dir="$(resolve_offline_bundle "$OFFLINE_BUNDLE")"
     install_from_offline_bundle "$bundle_dir"
+    configure_serial_permissions
   fi
 
   post_install_checks
