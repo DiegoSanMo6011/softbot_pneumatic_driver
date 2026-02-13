@@ -462,6 +462,7 @@ def cmd_gui_start(args: argparse.Namespace) -> int:
         return 0
 
     start_background(name="gui", parts=command, use_ros=True)
+    print("GUI started in background. If no window appears, run: ./scripts/labctl gui start --foreground")
     return 0
 
 

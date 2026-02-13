@@ -177,6 +177,27 @@ Desbloqueo temporal (si urge probar):
 sudo ./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
 ```
 
+### 7) `labctl gui start` dice "Started gui" pero no aparece ventana
+`labctl gui start` ejecuta la GUI en background. Para depurar, correr en foreground:
+```bash
+./scripts/labctl gui start --foreground
+```
+
+Si estás por SSH/TTY sin entorno gráfico, no abrirá ventana. Verificar:
+```bash
+echo "$XDG_SESSION_TYPE $DISPLAY"
+```
+Debe haber sesión gráfica y `DISPLAY` no vacío.
+
+Si aparece error de plugin Qt `xcb`, instalar dependencias:
+```bash
+sudo apt update
+sudo apt install -y \
+  libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+  libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 \
+  libxcb-xinput0 libxcb-xfixes0
+```
+
 ## Flujo completo con ESP32 conectada
 Reemplaza el puerto si tu equipo usa otro (`/dev/ttyACM0`, etc.).
 
