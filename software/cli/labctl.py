@@ -273,6 +273,31 @@ def resolve_example(name: str) -> Path:
     raise LabCtlError(f"Example not found: {name}. Available: {', '.join(available)}")
 
 
+def ensure_docker_access() -> None:
+    if shutil.which("docker") is None:
+        raise LabCtlError("docker command not found")
+
+    result = subprocess.run(
+        ["docker", "info"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+
+    stderr = (result.stderr or "").strip()
+    hint = (
+        "Docker daemon not reachable or permission denied. "
+        "Try: sudo systemctl enable --now docker && sudo usermod -aG docker $USER "
+        "then open a new login shell (or run: exec su -l $USER)."
+    )
+    if stderr:
+        raise LabCtlError(f"{hint}\nDocker error: {stderr}")
+    raise LabCtlError(hint)
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     profile, profile_path = load_profile(getattr(args, "profile", None))
 
@@ -395,8 +420,7 @@ def cmd_agent_start(args: argparse.Namespace) -> int:
     serial_dev = args.port or str(profile["agent"]["serial_dev"])
     baud = int(args.baud or profile["agent"]["baud"])
 
-    if shutil.which("docker") is None:
-        raise LabCtlError("docker command not found")
+    ensure_docker_access()
 
     subprocess.run(["docker", "rm", "-f", MICROROS_CONTAINER_NAME], check=False)
 

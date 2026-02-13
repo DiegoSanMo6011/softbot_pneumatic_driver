@@ -97,6 +97,11 @@ Si sigue fallando:
 sudo systemctl status docker --no-pager
 sudo journalctl -u docker -n 60 --no-pager
 ```
+Si cerraste solo una terminal y abriste otra, puede no aplicar el grupo nuevo.
+Haz logout/login de escritorio o:
+```bash
+exec su -l $USER
+```
 
 ### 3) `bash: /opt/ros/humble/setup.bash: No such file or directory`
 ROS 2 Humble no está instalado. Reintentar instalación:
@@ -157,7 +162,20 @@ newgrp docker
 docker info
 ```
 
-Si sigue fallando, cerrar sesión de escritorio y volver a entrar.
+Si sigue fallando:
+```bash
+sudo systemctl enable --now docker
+sudo systemctl restart docker
+exec su -l $USER
+id -nG
+docker info
+```
+Si `id -nG` no muestra `docker`, hacer logout/login completo o reiniciar.
+
+Desbloqueo temporal (si urge probar):
+```bash
+sudo ./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
+```
 
 ## Flujo completo con ESP32 conectada
 Reemplaza el puerto si tu equipo usa otro (`/dev/ttyACM0`, etc.).
