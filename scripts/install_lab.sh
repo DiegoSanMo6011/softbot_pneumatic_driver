@@ -36,6 +36,11 @@ require_cmd() {
   command -v "$cmd" >/dev/null 2>&1 || fail "Missing command: $cmd"
 }
 
+apt_pkg_available() {
+  local pkg="$1"
+  apt-cache show "$pkg" >/dev/null 2>&1
+}
+
 run_apt() {
   if [[ -n "$SUDO_CMD" ]]; then
     $SUDO_CMD apt-get "$@"
@@ -114,7 +119,24 @@ install_docker_online() {
     log "Docker already installed"
   else
     log "Installing Docker from Ubuntu repository"
-    run_apt install -y docker.io docker-compose-plugin
+    run_apt install -y docker.io
+  fi
+
+  if docker compose version >/dev/null 2>&1; then
+    log "Docker Compose plugin already available"
+  else
+    if apt_pkg_available docker-compose-plugin; then
+      log "Installing docker-compose-plugin"
+      run_apt install -y docker-compose-plugin
+    elif apt_pkg_available docker-compose-v2; then
+      log "Installing docker-compose-v2"
+      run_apt install -y docker-compose-v2
+    elif apt_pkg_available docker-compose; then
+      log "Installing legacy docker-compose"
+      run_apt install -y docker-compose
+    else
+      log "Warning: no docker compose package found in current apt repos"
+    fi
   fi
 
   local target_user="${SUDO_USER:-$USER}"
