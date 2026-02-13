@@ -39,6 +39,7 @@ Notas de operación:
 - Flashea **antes** de levantar el agent.
 - Si el agent está corriendo, el puerto serial queda ocupado para comunicación ROS.
 - `labctl stop` libera procesos y contenedores iniciados por la CLI.
+- Guia operativa detallada para sistema ya instalado: `docs/uso_sistema_instalado_es.md`.
 
 ## Instalación en computadora nueva (online, 1 comando)
 Estos pasos son para dejar una máquina lista desde cero.
@@ -306,6 +307,7 @@ experiments/              Datos experimentales y logs operativos
 ## Documentación principal
 - `docs/installation_quickstart_es.md`
 - `docs/installation_quickstart_en.md`
+- `docs/uso_sistema_instalado_es.md`
 - `docs/operations_runbook_es.md`
 - `docs/operations_runbook_en.md`
 - `docs/setup_lab_pc_dualboot_es.md`

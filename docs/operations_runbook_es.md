@@ -1,5 +1,9 @@
 # Runbook operativo - ES
 
+## Guia de uso diario (sistema ya instalado)
+Para flujo paso a paso completo de operacion diaria:
+- `docs/uso_sistema_instalado_es.md`
+
 ## Inicio de jornada
 1. Conectar ESP32 y verificar puerto serial:
 ```bash
@@ -23,7 +27,7 @@ ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 ```
 6. Iniciar GUI o ejemplo:
 ```bash
-./scripts/labctl gui start
+./scripts/labctl gui start --foreground
 ./scripts/labctl example run 09_tank_fill
 ```
 

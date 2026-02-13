@@ -17,6 +17,7 @@ SoftBot Lab Platform.
 - `setup_lab_pc_dualboot_en.md`
 - `installation_quickstart_es.md`
 - `installation_quickstart_en.md`
+- `uso_sistema_instalado_es.md`
 - `operations_runbook_es.md`
 - `operations_runbook_en.md`
 - `maintenance_handover_es.md`
