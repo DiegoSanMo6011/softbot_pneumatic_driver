@@ -198,6 +198,23 @@ sudo apt install -y \
   libxcb-xinput0 libxcb-xfixes0
 ```
 
+### 8) `ModuleNotFoundError: No module named 'PySide6'` al abrir GUI
+Reinstalar dependencias Python del entorno del repo:
+```bash
+./scripts/install_lab.sh --online
+```
+
+Validar que exista Python del `.venv`:
+```bash
+ls -l .venv/bin/python
+```
+
+Instalación manual rápida (si urge):
+```bash
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install PySide6 pyqtgraph
+```
+
 ## Flujo completo con ESP32 conectada
 Reemplaza el puerto si tu equipo usa otro (`/dev/ttyACM0`, etc.).
 

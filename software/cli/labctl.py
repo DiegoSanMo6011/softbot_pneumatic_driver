@@ -243,6 +243,17 @@ def resolve_pio_executable() -> str:
     raise LabCtlError("PlatformIO not found. Run ./scripts/install_lab.sh first.")
 
 
+def resolve_repo_python() -> str:
+    bundled = REPO_ROOT / ".venv" / "bin" / "python"
+    if bundled.exists():
+        return str(bundled)
+
+    detected = shutil.which("python3")
+    if detected:
+        return detected
+    return sys.executable
+
+
 def board_to_env(board: str) -> str:
     mapping = {
         "esp32dev": "esp32dev",
@@ -455,20 +466,25 @@ def cmd_gui_start(args: argparse.Namespace) -> int:
     if not GUI_SCRIPT.exists():
         raise LabCtlError(f"GUI script missing: {GUI_SCRIPT}")
 
-    command = ["python3", str(GUI_SCRIPT)]
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(GUI_SCRIPT)]
     if args.foreground:
         event("gui start foreground")
         run_command(ros_wrapped(command))
         return 0
 
     start_background(name="gui", parts=command, use_ros=True)
-    print("GUI started in background. If no window appears, run: ./scripts/labctl gui start --foreground")
+    print(
+        "GUI started in background. If no window appears, "
+        "run: ./scripts/labctl gui start --foreground"
+    )
     return 0
 
 
 def cmd_example_run(args: argparse.Namespace) -> int:
     example = resolve_example(args.name)
-    command = ["python3", str(example)]
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(example)]
 
     if args.foreground:
         event(f"example run foreground script={example}")
@@ -484,8 +500,9 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     if not SMOKE_SCRIPT.exists():
         raise LabCtlError(f"Smoke script missing: {SMOKE_SCRIPT}")
 
+    python_bin = resolve_repo_python()
     command = [
-        "python3",
+        python_bin,
         str(SMOKE_SCRIPT),
         "--profile",
         str(profile_path),
@@ -506,8 +523,9 @@ def cmd_hardware_test(args: argparse.Namespace) -> int:
     if not HARDWARE_TEST_SCRIPT.exists():
         raise LabCtlError(f"Hardware test script missing: {HARDWARE_TEST_SCRIPT}")
 
+    python_bin = resolve_repo_python()
     command = [
-        "python3",
+        python_bin,
         str(HARDWARE_TEST_SCRIPT),
         "--component",
         args.component,
@@ -527,7 +545,8 @@ def cmd_hardware_panel(args: argparse.Namespace) -> int:
     if not HARDWARE_TEST_SCRIPT.exists():
         raise LabCtlError(f"Hardware test script missing: {HARDWARE_TEST_SCRIPT}")
 
-    command = ["python3", str(HARDWARE_TEST_SCRIPT), "--interactive", "--pwm", str(args.pwm)]
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(HARDWARE_TEST_SCRIPT), "--interactive", "--pwm", str(args.pwm)]
     event(f"hardware panel pwm={args.pwm}")
     run_command(ros_wrapped(command))
     return 0
@@ -538,7 +557,8 @@ def cmd_hardware_off(args: argparse.Namespace) -> int:
     if not HARDWARE_TEST_SCRIPT.exists():
         raise LabCtlError(f"Hardware test script missing: {HARDWARE_TEST_SCRIPT}")
 
-    command = ["python3", str(HARDWARE_TEST_SCRIPT), "--off"]
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(HARDWARE_TEST_SCRIPT), "--off"]
     event("hardware off")
     run_command(ros_wrapped(command))
     return 0
