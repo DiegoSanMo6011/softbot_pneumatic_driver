@@ -209,6 +209,16 @@ void fatal_error_loop(int code) {
     }                                                                                              \
   }
 
+// Count transient publish failures without halting control execution.
+uint32_t publish_soft_failures = 0;
+#define RCSOFTCHECK(fn)                                                                             \
+  {                                                                                                 \
+    rcl_ret_t temp_rc = fn;                                                                         \
+    if ((temp_rc != RCL_RET_OK)) {                                                                  \
+      publish_soft_failures++;                                                                      \
+    }                                                                                               \
+  }
+
 void resetTurboPrefill();
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux);
 void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
@@ -432,7 +442,7 @@ void controlLoop() {
   }
 
   msg_feedback.data = current_pressure;
-  rcl_publish(&pub_feedback, &msg_feedback, NULL);
+  RCSOFTCHECK(rcl_publish(&pub_feedback, &msg_feedback, NULL));
 
   if (emergency_stop_active) {
     debug_data[0] = -1;
@@ -441,7 +451,7 @@ void controlLoop() {
     debug_data[3] = 0;
     msg_debug.data.data = debug_data;
     msg_debug.data.size = 4;
-    rcl_publish(&pub_debug, &msg_debug, NULL);
+    RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
     return;
   }
 
@@ -456,11 +466,11 @@ void controlLoop() {
     debug_data[3] = (int16_t)control_mode;
     msg_debug.data.data = debug_data;
     msg_debug.data.size = 4;
-    rcl_publish(&pub_debug, &msg_debug, NULL);
+    RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
 
     tank_state = 0;
     msg_tank_state.data = tank_state;
-    rcl_publish(&pub_tank_state, &msg_tank_state, NULL);
+    RCSOFTCHECK(rcl_publish(&pub_tank_state, &msg_tank_state, NULL));
     return;
   }
 
@@ -665,14 +675,14 @@ void controlLoop() {
   debug_data[3] = (int16_t)control_mode;
   msg_debug.data.data = debug_data;
   msg_debug.data.size = 4;
-  rcl_publish(&pub_debug, &msg_debug, NULL);
+  RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
 
   // Publicar estado del tanque
   if (control_mode != MODE_TANK_FILL && !tank_full_latched && !tank_fill_active) {
     tank_state = 0; // idle
   }
   msg_tank_state.data = tank_state;
-  rcl_publish(&pub_tank_state, &msg_tank_state, NULL);
+  RCSOFTCHECK(rcl_publish(&pub_tank_state, &msg_tank_state, NULL));
 }
 
 // ==========================================

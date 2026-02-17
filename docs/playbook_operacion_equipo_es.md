@@ -284,6 +284,30 @@ Interpretación:
 - Si hay cambios en `/hardware_test` pero no aparece `soft_robot_node`: revisar enlace agent-ESP32 y reset.
 - Si `hardware verify` falla en `/system_debug sample`: revisar que la ESP32 esté enlazada al agent, resetear ESP32 y repetir.
 
+## `/hardware_test` ausente pero telemetría presente
+Si `soft_robot_node` aparece y tienes `/pressure_feedback`, `/system_debug`, `/tank_state`, pero falta `/hardware_test`,
+la causa probable es límite de suscripciones en la librería precompilada de `micro_ros_arduino`.
+
+Rebuild recomendado:
+```bash
+cd ~/softbot_pneumatic_driver
+./scripts/rebuild_microros_esp32.sh --max-subscriptions 8
+```
+
+Después del rebuild:
+```bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
+./scripts/labctl stop
+./scripts/labctl firmware flash --profile default --port "$PORT"
+./scripts/labctl agent start --profile default --port "$PORT" --baud 115200
+./scripts/labctl hardware verify --timeout-s 12 --sample-timeout-s 5
+```
+
+Referencia detallada:
+- `docs/microros_rebuild_esp32_es.md`
+
 ## 8) Flujo KiCad (PC de laboratorio)
 Ubicar proyecto oficial:
 ```bash

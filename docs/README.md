@@ -2,6 +2,7 @@
 
 ## Activos (ruta operativa)
 - `playbook_operacion_equipo_es.md` (fuente principal para operación, capacitación y handover)
+- `microros_rebuild_esp32_es.md` (rebuild micro-ROS para recuperar `/hardware_test` sin perder PID embebido)
 - `arquitectura.md`
 - `neumatica.md`
 - `locomocion.md`

@@ -14,3 +14,11 @@ Official board profile: `esp32dev` (ESP32 DevKit v1).
 
 ## Entry source
 - `firmware/softbot_controller/softbot_controller.ino`
+
+## Rebuild micro-ROS (cuando falte `/hardware_test`)
+```bash
+./scripts/rebuild_microros_esp32.sh --max-subscriptions 8
+```
+
+Guía completa:
+- `docs/microros_rebuild_esp32_es.md`
