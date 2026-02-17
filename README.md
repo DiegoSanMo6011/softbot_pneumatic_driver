@@ -5,7 +5,6 @@ Plataforma reproducible para robots neumáticos suaves con ESP32 + ROS 2, lista 
 ## Alcance oficial
 - Runtime oficial de control: **Ubuntu 22.04 + ROS 2 Humble**
 - Despliegue de laboratorio: **Dual Boot Ubuntu + Windows**
-- Rol de Windows: **complementario** (ANSYS/FEM/mecánica), no runtime principal de control
 - micro-ROS Agent: **Docker**
 - Toolchain de firmware: **PlatformIO CLI**
 - Contrato de operación: **`labctl <subcomando>`**
