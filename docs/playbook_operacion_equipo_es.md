@@ -58,7 +58,38 @@ source /opt/ros/humble/setup.bash
 - **Para qué:** sanity check de pipeline completo.
 - **Nota:** puede “pasar” aunque no haya hardware real si la ruta de control no está verificando respuesta física.
 
-## 3) Pre-check rápido antes de sesión
+## 3) Catálogo completo de scripts (`scripts/`)
+### `./scripts/labctl`
+- **Qué hace:** wrapper principal de la plataforma. Ejecuta `software/cli/labctl.py`.
+- **Dónde corre:** host Linux.
+- **Para qué:** punto único de operación diaria (doctor, firmware, agent, gui, hardware, smoke, stop).
+
+### `./scripts/install_lab.sh`
+- **Qué hace:** instala dependencias de plataforma (modo online/offline).
+- **Dónde corre:** host Linux (requiere permisos de sistema en varios pasos).
+- **Para qué:** preparar una máquina nueva o reparar entorno roto.
+
+### `./scripts/create_offline_bundle.sh`
+- **Qué hace:** genera bundle de instalación para máquinas sin internet.
+- **Dónde corre:** host Linux con internet.
+- **Para qué:** despliegue offline en laboratorio o equipos restringidos.
+
+### `./scripts/test_no_hw.sh`
+- **Qué hace:** ejecuta validaciones sin hardware (lint, formato, checks de CLI/perfiles).
+- **Dónde corre:** host Linux.
+- **Para qué:** validar software/base del repo antes de usar ESP32.
+
+### `./scripts/tester_report.sh`
+- **Qué hace:** produce reporte automático de validación (software-only o con hardware).
+- **Dónde corre:** host Linux.
+- **Para qué:** evidencia formal de estado de plataforma para testers/equipo.
+
+### `./scripts/requirements_lab.txt`
+- **Qué es:** lista de dependencias Python de la plataforma.
+- **Dónde se usa:** por `install_lab.sh`/bootstrap de entorno.
+- **Para qué:** mantener reproducibilidad de entorno.
+
+## 4) Pre-check rápido antes de sesión
 ```bash
 id -nG
 docker info
@@ -70,7 +101,24 @@ Interpretación rápida:
 - Si no aparece serial: revisar cable/puerto/ESP32.
 - Si Docker falla: no podrá arrancar `agent start`.
 
-## 4) Diagnóstico de hardware (intención y secuencia)
+## 5) Requisitos para que la GUI funcione con hardware real
+La GUI puede abrir aunque no haya conexión real, pero para que **controle la ESP32** debe existir este camino activo:
+1. ESP32 conectada por USB y puerto detectado.
+2. Firmware cargado en la ESP32.
+3. `agent start` corriendo con el puerto correcto.
+4. GUI abierta en sesión gráfica (`DISPLAY` válido).
+
+Secuencia recomendada:
+```bash
+PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
+./scripts/labctl firmware flash --profile default --port "$PORT"
+./scripts/labctl agent start --profile default --port "$PORT" --baud 115200
+./scripts/labctl hardware gui --foreground
+```
+
+Si no corre `agent start`, la GUI abre pero no tendrá puente ROS2<->ESP32 activo.
+
+## 6) Diagnóstico de hardware (intención y secuencia)
 Comando recomendado:
 ```bash
 ./scripts/labctl hardware gui --foreground
@@ -93,7 +141,7 @@ CLI alternativa rápida:
 ./scripts/labctl hardware off
 ```
 
-## 5) Troubleshooting esencial
+## 7) Troubleshooting esencial
 ## Docker daemon no reachable
 ```bash
 sudo systemctl enable --now docker
@@ -120,7 +168,7 @@ exec su -l $USER
 echo "$XDG_SESSION_TYPE $DISPLAY"
 ```
 
-## 6) Flujo KiCad (PC de laboratorio)
+## 8) Flujo KiCad (PC de laboratorio)
 Ubicar proyecto oficial:
 ```bash
 find "$HOME" -name '*.kicad_pro' 2>/dev/null
@@ -136,18 +184,18 @@ Iteración mínima:
 Snapshot diario recomendado:
 - `YYYYMMDD_softbot_pcb_snapshot.zip`.
 
-## 7) Checklist de handover (resumen)
+## 9) Checklist de handover (resumen)
 - Cada integrante ejecuta `doctor`, identifica puerto y entiende secuencia completa.
 - Cada integrante corre diagnóstico hardware y cierre seguro.
 - Cada integrante abre KiCad, corre ERC/DRC y exporta evidencia.
 
-## 8) Plan mensual resumido (4 semanas)
+## 10) Plan mensual resumido (4 semanas)
 1. Semana 1: baseline PCB + backlog priorizado + handover inicial.
 2. Semana 2: cambios eléctricos de mayor impacto.
 3. Semana 3: prototipo/banco y validación con firmware/diagnóstico.
 4. Semana 4: cierre de transferencia + demo interna.
 
-## 9) Cierre seguro obligatorio
+## 11) Cierre seguro obligatorio
 ```bash
 ./scripts/labctl hardware off
 ./scripts/labctl stop
