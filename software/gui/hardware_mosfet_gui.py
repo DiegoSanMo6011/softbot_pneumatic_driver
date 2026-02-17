@@ -460,14 +460,20 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
     def _log_event(
         self,
         event: str,
-        mask: int,
-        pwm: int,
+        mask: int | None = None,
+        pwm: int | None = None,
         scenario_step: str = "",
         scenario_result: str = "",
         notes: str = "",
     ):
         if not self.log_writer:
             return
+
+        if mask is None:
+            mask = int(self.current_mask)
+        if pwm is None:
+            pwm = int(self.spin_pwm.value()) if hasattr(self, "spin_pwm") else 0
+
         active = set(decode_hardware_mask(mask))
         self.log_writer.writerow(
             [
