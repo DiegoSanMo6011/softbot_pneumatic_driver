@@ -71,6 +71,36 @@ const uint16_t HW_VALVE_BOOST = (1 << 6);
 const uint16_t HW_MUX_CHAMBER_A = (1 << 7);
 const uint16_t HW_MUX_CHAMBER_B = (1 << 8);
 
+const uint8_t DIAG_GROUP_MAIN = 1;
+const uint8_t DIAG_GROUP_AUX = 2;
+
+struct PumpOutputConfig {
+  uint16_t mask;
+  int channel;
+  int pin;
+  uint8_t telemetry_group;
+};
+
+struct DigitalOutputConfig {
+  uint16_t mask;
+  int pin;
+};
+
+const PumpOutputConfig DIAG_PUMP_OUTPUTS[] = {
+    {HW_PUMP_INFLATE_MAIN, CH_INFLATE_MAIN, PIN_PUMP_INFLATE_MAIN, DIAG_GROUP_MAIN},
+    {HW_PUMP_INFLATE_AUX, CH_INFLATE_AUX, PIN_PUMP_INFLATE_AUX, DIAG_GROUP_AUX},
+    {HW_PUMP_SUCTION_MAIN, CH_SUCCION_MAIN, PIN_PUMP_SUCTION_MAIN, DIAG_GROUP_MAIN},
+    {HW_PUMP_SUCTION_AUX, CH_SUCCION_AUX, PIN_PUMP_SUCTION_AUX, DIAG_GROUP_AUX},
+};
+
+const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
+    {HW_VALVE_INFLATE, PIN_VALVE_INFLATE},
+    {HW_VALVE_SUCTION, PIN_VALVE_SUCTION},
+    {HW_VALVE_BOOST, PIN_VALVE_BOOST},
+    {HW_MUX_CHAMBER_A, PIN_MUX_CHAMBER_A},
+    {HW_MUX_CHAMBER_B, PIN_MUX_CHAMBER_B},
+};
+
 // UMBRALES DE AGRESIVIDAD
 // Si el error es mayor a esto, ignoramos el PID y damos 100%
 const float AGGRESSIVE_THRESHOLD = 5.0f;
@@ -181,6 +211,8 @@ void fatal_error_loop(int code) {
 
 void resetTurboPrefill();
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux);
+void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
+                                    int16_t *active_aux);
 
 // ==========================================
 // FUNCIONES
@@ -192,15 +224,44 @@ float readPressureSensor() {
 }
 
 void stopActuators() {
-  ledcWrite(CH_INFLATE_MAIN, 0);
-  ledcWrite(CH_INFLATE_AUX, 0);
-  ledcWrite(CH_SUCCION_MAIN, 0);
-  ledcWrite(CH_SUCCION_AUX, 0);
-  digitalWrite(PIN_VALVE_INFLATE, LOW);
-  digitalWrite(PIN_VALVE_SUCTION, LOW);
-  digitalWrite(PIN_VALVE_BOOST, LOW);
-  digitalWrite(PIN_MUX_CHAMBER_A, LOW);
-  digitalWrite(PIN_MUX_CHAMBER_B, LOW);
+  const size_t pump_count = sizeof(DIAG_PUMP_OUTPUTS) / sizeof(DIAG_PUMP_OUTPUTS[0]);
+  for (size_t idx = 0; idx < pump_count; idx++) {
+    ledcWrite(DIAG_PUMP_OUTPUTS[idx].channel, 0);
+  }
+
+  const size_t digital_count = sizeof(DIAG_DIGITAL_OUTPUTS) / sizeof(DIAG_DIGITAL_OUTPUTS[0]);
+  for (size_t idx = 0; idx < digital_count; idx++) {
+    digitalWrite(DIAG_DIGITAL_OUTPUTS[idx].pin, LOW);
+  }
+}
+
+void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
+                                    int16_t *active_aux) {
+  int16_t main_pwm = 0;
+  int16_t aux_pwm = 0;
+
+  const size_t pump_count = sizeof(DIAG_PUMP_OUTPUTS) / sizeof(DIAG_PUMP_OUTPUTS[0]);
+  for (size_t idx = 0; idx < pump_count; idx++) {
+    const PumpOutputConfig output = DIAG_PUMP_OUTPUTS[idx];
+    const bool enabled = (mask & output.mask) != 0;
+    const int pwm_value = enabled ? pwm_diag : 0;
+    ledcWrite(output.channel, pwm_value);
+
+    if (enabled && output.telemetry_group == DIAG_GROUP_MAIN) {
+      main_pwm = (int16_t)pwm_diag;
+    } else if (enabled && output.telemetry_group == DIAG_GROUP_AUX) {
+      aux_pwm = (int16_t)pwm_diag;
+    }
+  }
+
+  const size_t digital_count = sizeof(DIAG_DIGITAL_OUTPUTS) / sizeof(DIAG_DIGITAL_OUTPUTS[0]);
+  for (size_t idx = 0; idx < digital_count; idx++) {
+    const DigitalOutputConfig output = DIAG_DIGITAL_OUTPUTS[idx];
+    digitalWrite(output.pin, (mask & output.mask) ? HIGH : LOW);
+  }
+
+  *active_main = main_pwm;
+  *active_aux = aux_pwm;
 }
 
 void triggerEmergencyStop() {
@@ -386,25 +447,9 @@ void controlLoop() {
 
   if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
     int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
-
-    bool pump_inflate_main_on = (hardware_test_mask & HW_PUMP_INFLATE_MAIN) != 0;
-    bool pump_inflate_aux_on = (hardware_test_mask & HW_PUMP_INFLATE_AUX) != 0;
-    bool pump_suction_main_on = (hardware_test_mask & HW_PUMP_SUCTION_MAIN) != 0;
-    bool pump_suction_aux_on = (hardware_test_mask & HW_PUMP_SUCTION_AUX) != 0;
-
-    ledcWrite(CH_INFLATE_MAIN, pump_inflate_main_on ? pwm_diag : 0);
-    ledcWrite(CH_INFLATE_AUX, pump_inflate_aux_on ? pwm_diag : 0);
-    ledcWrite(CH_SUCCION_MAIN, pump_suction_main_on ? pwm_diag : 0);
-    ledcWrite(CH_SUCCION_AUX, pump_suction_aux_on ? pwm_diag : 0);
-
-    digitalWrite(PIN_VALVE_INFLATE, (hardware_test_mask & HW_VALVE_INFLATE) ? HIGH : LOW);
-    digitalWrite(PIN_VALVE_SUCTION, (hardware_test_mask & HW_VALVE_SUCTION) ? HIGH : LOW);
-    digitalWrite(PIN_VALVE_BOOST, (hardware_test_mask & HW_VALVE_BOOST) ? HIGH : LOW);
-    digitalWrite(PIN_MUX_CHAMBER_A, (hardware_test_mask & HW_MUX_CHAMBER_A) ? HIGH : LOW);
-    digitalWrite(PIN_MUX_CHAMBER_B, (hardware_test_mask & HW_MUX_CHAMBER_B) ? HIGH : LOW);
-
-    int16_t active_main = (pump_inflate_main_on || pump_suction_main_on) ? pwm_diag : 0;
-    int16_t active_aux = (pump_inflate_aux_on || pump_suction_aux_on) ? pwm_diag : 0;
+    int16_t active_main = 0;
+    int16_t active_aux = 0;
+    applyHardwareDiagnosticOutputs(hardware_test_mask, pwm_diag, &active_main, &active_aux);
     debug_data[0] = active_main;
     debug_data[1] = active_aux;
     debug_data[2] = 0;
@@ -640,21 +685,17 @@ void setup() {
   }
   ads.setGain(GAIN_ONE);
 
-  pinMode(PIN_VALVE_INFLATE, OUTPUT);
-  pinMode(PIN_VALVE_SUCTION, OUTPUT);
-  pinMode(PIN_VALVE_BOOST, OUTPUT);
-  pinMode(PIN_MUX_CHAMBER_A, OUTPUT);
-  pinMode(PIN_MUX_CHAMBER_B, OUTPUT);
+  const size_t digital_count = sizeof(DIAG_DIGITAL_OUTPUTS) / sizeof(DIAG_DIGITAL_OUTPUTS[0]);
+  for (size_t idx = 0; idx < digital_count; idx++) {
+    pinMode(DIAG_DIGITAL_OUTPUTS[idx].pin, OUTPUT);
+  }
   pinMode(PIN_LED_STATUS, OUTPUT);
 
-  ledcSetup(CH_INFLATE_MAIN, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PIN_PUMP_INFLATE_MAIN, CH_INFLATE_MAIN);
-  ledcSetup(CH_INFLATE_AUX, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PIN_PUMP_INFLATE_AUX, CH_INFLATE_AUX); // PIN 5
-  ledcSetup(CH_SUCCION_MAIN, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PIN_PUMP_SUCTION_MAIN, CH_SUCCION_MAIN);
-  ledcSetup(CH_SUCCION_AUX, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PIN_PUMP_SUCTION_AUX, CH_SUCCION_AUX);
+  const size_t pump_count = sizeof(DIAG_PUMP_OUTPUTS) / sizeof(DIAG_PUMP_OUTPUTS[0]);
+  for (size_t idx = 0; idx < pump_count; idx++) {
+    ledcSetup(DIAG_PUMP_OUTPUTS[idx].channel, PWM_FREQ, PWM_RES);
+    ledcAttachPin(DIAG_PUMP_OUTPUTS[idx].pin, DIAG_PUMP_OUTPUTS[idx].channel);
+  }
 
   stopActuators();
 

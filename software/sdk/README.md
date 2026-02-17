@@ -39,6 +39,9 @@ software/
   Incluye llenado de tanque (modo 3) y lectura de `/tank_state`.
   Incluye **venteo** (modo 4) para liberar presión a atmósfera.
   Incluye diagnóstico por componente (modo 9) via `set_hardware_test(bitmask, pwm)`.
+  Incluye `set_hardware_components(component_ids, pwm)` para activar actuadores por id.
+  Incluye `set_hardware_groups(pressure_on, vacuum_on, valves, mux, pwm)` para
+  diagnóstico por grupos de bombas + válvulas/mux independientes.
   Incluye `stop_hardware_test()` para apagar salidas de diagnóstico.
 
 - **`ejemplos/`**  

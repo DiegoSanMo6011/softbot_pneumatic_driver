@@ -1,24 +1,45 @@
-# GUI de Escritorio
+# GUIs de Escritorio
 
-Script principal:
-```
+## 1) GUI principal de telemetría y control
+Script:
+```text
 software/gui/softbot_gui.py
 ```
 
-Dependencias:
-- pyqtgraph
-- PySide6 (o PyQt5 si PySide6 no está disponible)
+Incluye:
+- Telemetría en tiempo real.
+- Modos de control PID/PWM/turbo/tanque/venteo.
+- Panel de hardware test por componente.
 
-Ejemplo:
+## 2) GUI dedicada de diagnóstico MOSFET
+Script:
+```text
+software/gui/hardware_mosfet_gui.py
+```
+
+Incluye:
+- Válvulas independientes (`inflate`, `suction`, `boost`).
+- Bombas agrupadas por `presión` y `vacío`.
+- MUX independientes (`mux_a`, `mux_b`).
+- Indicadores tipo LED ON/OFF por actuador.
+- Auto-OFF de seguridad por inactividad (10 s).
+- Logging CSV automático en `experiments/logs/hardware_diag/`.
+- Escenario guiado `Pre-Competition MOSFET Check v1` con marcado PASS/FAIL.
+
+## Dependencias
+- `pyqtgraph` (solo para `softbot_gui.py`)
+- `PySide6` (o `PyQt5` como fallback)
+
+## Ejecución
 ```bash
 source /opt/ros/humble/setup.bash
 python3 -m pip install pyqtgraph PySide6
 python3 software/gui/softbot_gui.py
+python3 software/gui/hardware_mosfet_gui.py
 ```
 
-Incluye controles de **BOOST** (tanque) para abrir/cerrar la válvula o enviar un pulso.
-Incluye botón recomendado **Inflar Turbo+PID** (modo 5 firmware).
-Incluye controles de **llenado de tanque** (modo 3) con setpoint configurable.
-Incluye **venteo** para liberar presión a atmósfera.
-Incluye panel **Hardware test (componentes)** para activar bombas/válvulas/mux individualmente
-en modo 9 de firmware.
+También disponible por CLI:
+```bash
+./scripts/labctl gui start
+./scripts/labctl hardware gui --foreground
+```

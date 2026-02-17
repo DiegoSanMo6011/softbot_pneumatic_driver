@@ -18,5 +18,6 @@ Core commands:
 - `labctl smoke`
 - `labctl hardware test --component <name>`
 - `labctl hardware panel`
+- `labctl hardware gui [--foreground]`
 - `labctl hardware off`
 - `labctl stop`

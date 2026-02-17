@@ -21,6 +21,7 @@ FIRMWARE_DIR = REPO_ROOT / "firmware"
 PROFILES_DIR = REPO_ROOT / "config" / "profiles"
 EXAMPLES_DIR = REPO_ROOT / "software" / "ejemplos"
 GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "softbot_gui.py"
+HARDWARE_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "hardware_mosfet_gui.py"
 SMOKE_SCRIPT = REPO_ROOT / "software" / "tools" / "smoke_lab.py"
 HARDWARE_TEST_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_component_tester.py"
 
@@ -564,6 +565,25 @@ def cmd_hardware_off(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hardware_gui(args: argparse.Namespace) -> int:
+    if not HARDWARE_GUI_SCRIPT.exists():
+        raise LabCtlError(f"Hardware GUI script missing: {HARDWARE_GUI_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(HARDWARE_GUI_SCRIPT)]
+    if args.foreground:
+        event("hardware gui foreground")
+        run_command(ros_wrapped(command))
+        return 0
+
+    start_background(name="hardware_gui", parts=command, use_ros=True)
+    print(
+        "Hardware GUI started in background. If no window appears, "
+        "run: ./scripts/labctl hardware gui --foreground"
+    )
+    return 0
+
+
 def terminate_process(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -686,6 +706,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     hw_off = hardware_sub.add_parser("off", help="Force all hardware outputs OFF")
     hw_off.set_defaults(func=cmd_hardware_off)
+
+    hw_gui = hardware_sub.add_parser("gui", help="Start dedicated MOSFET hardware diagnostics GUI")
+    hw_gui.add_argument("--foreground", action="store_true", help="Run attached to terminal")
+    hw_gui.set_defaults(func=cmd_hardware_gui)
 
     stop = sub.add_parser("stop", help="Stop processes/containers started via labctl")
     stop.set_defaults(func=cmd_stop)

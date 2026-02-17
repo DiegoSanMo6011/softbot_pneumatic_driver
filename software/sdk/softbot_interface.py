@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterable
 
 import rclpy
 from rclpy.node import Node
@@ -29,6 +30,7 @@ try:
         MODE_TANK_FILL,
         MODE_VENT,
         VALID_CHAMBERS,
+        build_hardware_mask,
     )
 except ImportError:
     from protocol import (  # type: ignore
@@ -44,6 +46,7 @@ except ImportError:
         MODE_TANK_FILL,
         MODE_VENT,
         VALID_CHAMBERS,
+        build_hardware_mask,
     )
 
 
@@ -261,6 +264,79 @@ class SoftBot(Node):
             self.pub_hwtest.publish(mask_msg)
             if i < repeats - 1:
                 time.sleep(interval_s)
+
+    def set_hardware_components(
+        self,
+        component_ids: Iterable[str],
+        pwm: int = 120,
+        repeats: int = 3,
+        interval_s: float = 0.03,
+    ) -> int:
+        """Apply hardware diagnostics from declarative component ids."""
+        mask = build_hardware_mask(component_ids=component_ids)
+        self.set_hardware_test(bitmask=mask, pwm=pwm, repeats=repeats, interval_s=interval_s)
+        return mask
+
+    def set_hardware_groups(
+        self,
+        pressure_on: bool,
+        vacuum_on: bool,
+        valves: dict[str, bool] | None = None,
+        mux: dict[str, bool] | None = None,
+        pwm: int = 120,
+        repeats: int = 3,
+        interval_s: float = 0.03,
+    ) -> int:
+        """
+        Apply grouped hardware diagnostics.
+
+        `pressure_on` and `vacuum_on` enable pump groups.
+        `valves` accepts keys: inflate, suction, boost or full ids (valve_*).
+        `mux` accepts keys: a, b or full ids (mux_*).
+        """
+        groups: list[str] = []
+        if pressure_on:
+            groups.append("pressure")
+        if vacuum_on:
+            groups.append("vacuum")
+
+        valve_map = {
+            "inflate": "valve_inflate",
+            "suction": "valve_suction",
+            "boost": "valve_boost",
+            "valve_inflate": "valve_inflate",
+            "valve_suction": "valve_suction",
+            "valve_boost": "valve_boost",
+        }
+        mux_map = {
+            "a": "mux_a",
+            "b": "mux_b",
+            "mux_a": "mux_a",
+            "mux_b": "mux_b",
+        }
+
+        component_ids: list[str] = []
+        for raw_key, raw_value in (valves or {}).items():
+            if not bool(raw_value):
+                continue
+            key = str(raw_key).strip().lower()
+            if key not in valve_map:
+                valid = ", ".join(sorted(valve_map))
+                raise ValueError(f"Unknown valve key '{raw_key}'. Valid: {valid}")
+            component_ids.append(valve_map[key])
+
+        for raw_key, raw_value in (mux or {}).items():
+            if not bool(raw_value):
+                continue
+            key = str(raw_key).strip().lower()
+            if key not in mux_map:
+                valid = ", ".join(sorted(mux_map))
+                raise ValueError(f"Unknown mux key '{raw_key}'. Valid: {valid}")
+            component_ids.append(mux_map[key])
+
+        mask = build_hardware_mask(component_ids=component_ids, groups=groups)
+        self.set_hardware_test(bitmask=mask, pwm=pwm, repeats=repeats, interval_s=interval_s)
+        return mask
 
     def stop_hardware_test(self):
         """Exit hardware diagnostic mode and stop all outputs."""

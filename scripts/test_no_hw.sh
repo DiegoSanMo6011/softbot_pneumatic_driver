@@ -35,5 +35,6 @@ log "CLI command surface"
 ./scripts/labctl smoke --help >/dev/null
 ./scripts/labctl hardware --help >/dev/null
 ./scripts/labctl hardware test --help >/dev/null
+./scripts/labctl hardware gui --help >/dev/null
 
 log "No-hardware checks completed"
