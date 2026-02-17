@@ -118,6 +118,18 @@ PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
 
 Si no corre `agent start`, la GUI abre pero no tendrá puente ROS2<->ESP32 activo.
 
+Verificación rápida del puente:
+```bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+ros2 node list
+ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber|tank_state"
+```
+
+Resultado esperado con sistema activo:
+- Nodo `soft_robot_node` visible.
+- Tópicos de control/telemetría visibles (`/pressure_mode`, `/hardware_test`, `/system_debug`, etc.).
+
 ## 6) Diagnóstico de hardware (intención y secuencia)
 Comando recomendado:
 ```bash
@@ -140,6 +152,17 @@ CLI alternativa rápida:
 ./scripts/labctl hardware test --component inflate_main --pwm 120 --duration-s 1.0
 ./scripts/labctl hardware off
 ```
+
+Test robusto recomendado (contrato ROS de firmware + `system_debug`):
+```bash
+./scripts/labctl hardware verify --timeout-s 8 --sample-timeout-s 3
+```
+
+Qué valida `hardware verify`:
+1. Existe el nodo de firmware `soft_robot_node`.
+2. Existen tópicos de telemetría esperados y tienen publisher (`/pressure_feedback`, `/system_debug`, `/tank_state`).
+3. Existen tópicos de comando esperados y tienen subscriber del firmware.
+4. Llega al menos un mensaje real en `/system_debug` (si no usas `--no-system-debug-sample`).
 
 ## 7) Troubleshooting esencial
 ## Docker daemon no reachable
@@ -167,6 +190,62 @@ exec su -l $USER
 ./scripts/labctl hardware gui --foreground
 echo "$XDG_SESSION_TYPE $DISPLAY"
 ```
+
+## `agent start` corre, pero no aparecen nodos/tópicos de ESP32
+Esto indica que Docker/agent están arriba, pero la sesión micro-ROS con la ESP32 no quedó enlazada.
+
+Secuencia de recuperación recomendada:
+```bash
+cd ~/softbot_pneumatic_driver
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+./scripts/labctl stop
+PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
+./scripts/labctl agent start --profile default --port "$PORT" --baud 115200
+docker logs -f softbot_microros_agent
+```
+
+Después de levantar el agent:
+1. Presionar `EN/RESET` en la ESP32 (o desconectar/conectar USB).
+2. En otra terminal:
+```bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+ros2 daemon stop
+ros2 daemon start
+ros2 node list
+ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber|tank_state"
+```
+
+Notas importantes:
+- El mensaje `No such container: softbot_microros_agent` al arrancar `agent start` es normal (intenta borrar el contenedor anterior).
+- Si el firmware arrancó sin agent disponible, puede requerir reset físico de la ESP32 para registrar correctamente el nodo.
+
+## Cómo confirmar que la GUI sí envía señal a bombas/MOSFET
+Abrir monitoreo ROS mientras operas la GUI:
+```bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=0
+ros2 topic echo /hardware_test
+ros2 topic echo /pressure_mode
+ros2 topic echo /system_debug
+```
+
+Validaciones mínimas:
+1. En GUI activar **Bombas de Presión**:
+   - `/pressure_mode` debe ir a `9` (modo diagnóstico).
+   - `/hardware_test` debe mostrar máscara `3`.
+2. En GUI activar **Bombas de Vacío**:
+   - `/hardware_test` debe mostrar máscara `12`.
+3. En GUI activar ambas:
+   - `/hardware_test` debe mostrar máscara `15`.
+4. En `/system_debug`, los dos primeros campos deben reflejar PWM activo por grupo.
+
+Interpretación:
+- Si ROS muestra cambios y el LED MOSFET no enciende: problema en ruta eléctrica (driver, MOSFET, alimentación, cableado o board).
+- Si no hay cambios en `/hardware_test`: problema de publicación GUI/ROS.
+- Si hay cambios en `/hardware_test` pero no aparece `soft_robot_node`: revisar enlace agent-ESP32 y reset.
+- Si `hardware verify` falla en `/system_debug sample`: revisar que la ESP32 esté enlazada al agent, resetear ESP32 y repetir.
 
 ## 8) Flujo KiCad (PC de laboratorio)
 Ubicar proyecto oficial:

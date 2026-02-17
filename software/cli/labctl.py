@@ -24,6 +24,7 @@ GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "softbot_gui.py"
 HARDWARE_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "hardware_mosfet_gui.py"
 SMOKE_SCRIPT = REPO_ROOT / "software" / "tools" / "smoke_lab.py"
 HARDWARE_TEST_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_component_tester.py"
+HARDWARE_RUNTIME_CHECK_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_runtime_check.py"
 
 OPS_DIR = REPO_ROOT / "experiments" / "logs" / "ops"
 STATE_FILE = OPS_DIR / "labctl_state.json"
@@ -584,6 +585,33 @@ def cmd_hardware_gui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hardware_verify(args: argparse.Namespace) -> int:
+    if not HARDWARE_RUNTIME_CHECK_SCRIPT.exists():
+        raise LabCtlError(f"Hardware runtime check script missing: {HARDWARE_RUNTIME_CHECK_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [
+        python_bin,
+        str(HARDWARE_RUNTIME_CHECK_SCRIPT),
+        "--timeout-s",
+        str(args.timeout_s),
+        "--sample-timeout-s",
+        str(args.sample_timeout_s),
+        "--node-name",
+        str(args.node_name),
+    ]
+    if args.no_system_debug_sample:
+        command.append("--no-system-debug-sample")
+
+    event(
+        "hardware verify "
+        f"timeout_s={args.timeout_s} sample_timeout_s={args.sample_timeout_s} "
+        f"node={args.node_name} sample={'off' if args.no_system_debug_sample else 'on'}"
+    )
+    run_command(ros_wrapped(command))
+    return 0
+
+
 def terminate_process(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -710,6 +738,20 @@ def build_parser() -> argparse.ArgumentParser:
     hw_gui = hardware_sub.add_parser("gui", help="Start dedicated MOSFET hardware diagnostics GUI")
     hw_gui.add_argument("--foreground", action="store_true", help="Run attached to terminal")
     hw_gui.set_defaults(func=cmd_hardware_gui)
+
+    hw_verify = hardware_sub.add_parser(
+        "verify",
+        help="Verify firmware ROS node, command/telemetry topics, and /system_debug traffic",
+    )
+    hw_verify.add_argument("--timeout-s", type=float, default=8.0)
+    hw_verify.add_argument("--sample-timeout-s", type=float, default=3.0)
+    hw_verify.add_argument("--node-name", type=str, default="soft_robot_node")
+    hw_verify.add_argument(
+        "--no-system-debug-sample",
+        action="store_true",
+        help="Skip waiting for a /system_debug message payload",
+    )
+    hw_verify.set_defaults(func=cmd_hardware_verify)
 
     stop = sub.add_parser("stop", help="Stop processes/containers started via labctl")
     stop.set_defaults(func=cmd_stop)

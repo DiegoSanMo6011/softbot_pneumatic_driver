@@ -19,5 +19,6 @@ Core commands:
 - `labctl hardware test --component <name>`
 - `labctl hardware panel`
 - `labctl hardware gui [--foreground]`
+- `labctl hardware verify [--timeout-s 8 --sample-timeout-s 3]`
 - `labctl hardware off`
 - `labctl stop`
