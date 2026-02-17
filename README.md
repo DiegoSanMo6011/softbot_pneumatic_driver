@@ -2,6 +2,13 @@
 
 Plataforma de control para robot suave neumático con ESP32 + ROS 2 (Linux como runtime oficial).
 
+## Primera vez en una laptop nueva
+```bash
+cd ~/softbot_pneumatic_driver
+./scripts/install_lab.sh --online
+exec su -l $USER
+```
+
 ## Inicio rápido (operación diaria con hardware)
 ```bash
 cd ~/softbot_pneumatic_driver

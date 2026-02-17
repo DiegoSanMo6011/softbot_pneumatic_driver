@@ -101,6 +101,43 @@ Interpretación rápida:
 - Si no aparece serial: revisar cable/puerto/ESP32.
 - Si Docker falla: no podrá arrancar `agent start`.
 
+## 4.1) Recuperación de laptop nueva (errores de `doctor`)
+Si al arrancar ves algo como:
+- `[FAIL] ROS 2 Humble setup: /opt/ros/humble/setup.bash`
+- `[FAIL] docker command: missing`
+- `[FAIL] PlatformIO: PlatformIO not found...`
+- `[FAIL] Docker daemon: docker not available`
+
+aplica esta secuencia exacta:
+```bash
+cd ~/softbot_pneumatic_driver
+./scripts/install_lab.sh --online
+exec su -l $USER
+cd ~/softbot_pneumatic_driver
+source /opt/ros/humble/setup.bash
+./scripts/labctl doctor --profile default
+```
+
+Qué corrige esta secuencia:
+1. Instala ROS 2 Humble (`/opt/ros/humble/setup.bash`).
+2. Instala Docker y habilita servicio.
+3. Crea `.venv` e instala dependencias Python/PlatformIO.
+4. Aplica grupos de usuario (`docker`, `dialout`/`uucp`) al re-login.
+
+Si aún falla Docker después de instalar:
+```bash
+sudo systemctl enable --now docker
+docker info
+```
+
+Si sale `[FAIL] Serial devices: none`:
+- Es normal si la ESP32 no está conectada.
+- Si sí está conectada, revisar cable USB de datos y usar:
+```bash
+ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+dmesg | tail -n 50
+```
+
 ## 5) Requisitos para que la GUI funcione con hardware real
 La GUI puede abrir aunque no haya conexión real, pero para que **controle la ESP32** debe existir este camino activo:
 1. ESP32 conectada por USB y puerto detectado.
