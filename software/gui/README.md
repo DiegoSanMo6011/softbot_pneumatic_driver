@@ -37,8 +37,11 @@ software/gui/pump_eval_gui.py
 
 Incluye:
 - Protocolo dual por corrida: capacidad y tiempo a target en presión y vacío.
-- Cámara fija de evaluación `ABC` (`active_chamber=7`).
+- Selector de cámaras A/B/C (bitmask `1..7`, default `ABC=7`).
+- Ajuste de ganancias PID (`Kp+`, `Ki+`, `Kp-`, `Ki-`) antes de correr evaluación.
 - Curva en vivo de `kPa` cruda y filtrada (mediana deslizante configurable).
+- Comparativo histórico visual seleccionando una o varias filas de registro.
+- Guía explícita de líneas verticales de eventos (inicio/fin fase, target, tope).
 - Métricas en vivo: topes, tiempos de tope, tiempos a target.
 - Criterio `APTA/NO_APTA` (debe cumplir ambos targets en todas las corridas).
 - Score balanceado con penalización por variabilidad entre corridas.

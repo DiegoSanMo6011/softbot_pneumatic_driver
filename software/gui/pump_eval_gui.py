@@ -39,14 +39,17 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.raw_values: deque[float] = deque(maxlen=12000)
         self.filtered_values: deque[float] = deque(maxlen=12000)
         self.markers: list[Any] = []
+        self.history_curves: list[Any] = []
+        self.history_rows: list[dict[str, str]] = []
 
         self.last_summary_csv: str | None = None
         self.last_raw_csv: str | None = None
 
-        self.setWindowTitle("Pump Evaluator GUI (ABC fijo)")
+        self.setWindowTitle("Pump Evaluator GUI (selección de cámaras)")
         self.resize(1400, 860)
 
         self._build_ui()
+        self._set_plot_live_mode()
         self._update_idle_state()
         self.refresh_history()
 
@@ -55,25 +58,68 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         root = QtWidgets.QVBoxLayout(central)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
 
         top_split = QtWidgets.QHBoxLayout()
+        top_split.setSpacing(12)
         top_split.addWidget(self._build_config_panel(), 2)
         top_split.addWidget(self._build_live_panel(), 3)
-        root.addLayout(top_split, 2)
+        root.addLayout(top_split, 4)
 
         root.addWidget(self._build_plot_panel(), 3)
 
         bottom_split = QtWidgets.QHBoxLayout()
+        bottom_split.setSpacing(12)
         bottom_split.addWidget(self._build_history_panel(), 2)
         bottom_split.addWidget(self._build_log_panel(), 3)
         root.addLayout(bottom_split, 2)
 
-    def _build_config_panel(self) -> QtWidgets.QGroupBox:
+    def _build_config_panel(self) -> QtWidgets.QWidget:
         box = QtWidgets.QGroupBox("Configuración evaluación")
         form = QtWidgets.QFormLayout(box)
+        form.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        form.setFormAlignment(QtCore.Qt.AlignTop)
+        form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(8)
 
         self.input_pump_label = QtWidgets.QLineEdit("actuales")
-        self.label_chamber = QtWidgets.QLabel("ABC (mask=7) fijo")
+
+        self.cb_chamber_a = QtWidgets.QCheckBox("A")
+        self.cb_chamber_b = QtWidgets.QCheckBox("B")
+        self.cb_chamber_c = QtWidgets.QCheckBox("C")
+        self.cb_chamber_a.setChecked(True)
+        self.cb_chamber_b.setChecked(True)
+        self.cb_chamber_c.setChecked(True)
+        chamber_widget = QtWidgets.QWidget()
+        chamber_layout = QtWidgets.QHBoxLayout(chamber_widget)
+        chamber_layout.setContentsMargins(0, 0, 0, 0)
+        chamber_layout.setSpacing(12)
+        chamber_layout.addWidget(self.cb_chamber_a)
+        chamber_layout.addWidget(self.cb_chamber_b)
+        chamber_layout.addWidget(self.cb_chamber_c)
+        chamber_layout.addStretch(1)
+
+        self.spin_kp_pos = QtWidgets.QDoubleSpinBox()
+        self.spin_kp_pos.setRange(-2000.0, 2000.0)
+        self.spin_kp_pos.setDecimals(3)
+        self.spin_kp_pos.setValue(24.0)
+
+        self.spin_ki_pos = QtWidgets.QDoubleSpinBox()
+        self.spin_ki_pos.setRange(-10000.0, 10000.0)
+        self.spin_ki_pos.setDecimals(3)
+        self.spin_ki_pos.setValue(1500.0)
+
+        self.spin_kp_neg = QtWidgets.QDoubleSpinBox()
+        self.spin_kp_neg.setRange(-2000.0, 2000.0)
+        self.spin_kp_neg.setDecimals(3)
+        self.spin_kp_neg.setValue(-75.0)
+
+        self.spin_ki_neg = QtWidgets.QDoubleSpinBox()
+        self.spin_ki_neg.setRange(-10000.0, 10000.0)
+        self.spin_ki_neg.setDecimals(3)
+        self.spin_ki_neg.setValue(-750.0)
 
         self.spin_target_pressure = QtWidgets.QDoubleSpinBox()
         self.spin_target_pressure.setRange(1.0, 80.0)
@@ -145,12 +191,43 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.label_run_status.setWordWrap(True)
 
         buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(10)
         buttons.addWidget(self.btn_start)
         buttons.addWidget(self.btn_cancel)
         buttons.addWidget(self.btn_export)
 
+        controls = [
+            self.input_pump_label,
+            self.spin_kp_pos,
+            self.spin_ki_pos,
+            self.spin_kp_neg,
+            self.spin_ki_neg,
+            self.spin_target_pressure,
+            self.spin_target_vacuum,
+            self.spin_pwm_capacity,
+            self.spin_timeout_phase,
+            self.spin_runs,
+            self.spin_sample_ms,
+            self.spin_vent_s,
+            self.spin_rest_s,
+            self.spin_filter_window,
+            self.input_registry_csv,
+            self.btn_start,
+            self.btn_cancel,
+            self.btn_export,
+            self.btn_refresh_history,
+        ]
+        for control in controls:
+            control.setMinimumHeight(30)
+        for cb in (self.cb_chamber_a, self.cb_chamber_b, self.cb_chamber_c, self.cb_demo):
+            cb.setMinimumHeight(26)
+
         form.addRow("Pump label", self.input_pump_label)
-        form.addRow("Cámara", self.label_chamber)
+        form.addRow("Cámara(s) [A/B/C]", chamber_widget)
+        form.addRow("Kp+", self.spin_kp_pos)
+        form.addRow("Ki+", self.spin_ki_pos)
+        form.addRow("Kp-", self.spin_kp_neg)
+        form.addRow("Ki-", self.spin_ki_neg)
         form.addRow("Target presión", self.spin_target_pressure)
         form.addRow("Target vacío", self.spin_target_vacuum)
         form.addRow("PWM capacidad", self.spin_pwm_capacity)
@@ -166,7 +243,26 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         form.addRow(self.btn_refresh_history)
         form.addRow(self.label_run_status)
 
-        return box
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setWidget(box)
+
+        container = QtWidgets.QWidget()
+        container_layout = QtWidgets.QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.addWidget(scroll)
+        return container
+
+    def _selected_chamber_mask(self) -> int:
+        mask = 0
+        if self.cb_chamber_a.isChecked():
+            mask |= 1
+        if self.cb_chamber_b.isChecked():
+            mask |= 2
+        if self.cb_chamber_c.isChecked():
+            mask |= 4
+        return mask
 
     def _build_live_panel(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Métricas en vivo")
@@ -222,7 +318,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         return box
 
     def _build_plot_panel(self) -> QtWidgets.QGroupBox:
-        box = QtWidgets.QGroupBox("Curva kPa (cruda y filtrada)")
+        box = QtWidgets.QGroupBox("Curvas kPa (en vivo / histórico)")
         layout = QtWidgets.QVBoxLayout(box)
 
         pg.setConfigOptions(antialias=True)
@@ -240,7 +336,20 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             name="Presión filtrada",
         )
 
+        self.label_plot_context = QtWidgets.QLabel(
+            "Modo gráfica: en vivo. Para comparar histórico, selecciona una o más filas abajo."
+        )
+        self.label_plot_context.setWordWrap(True)
+
+        self.label_marker_legend = QtWidgets.QLabel(
+            "Líneas verticales: azul=inicio fase, gris=fin fase, "
+            "verde=cruce target, magenta=tope fase."
+        )
+        self.label_marker_legend.setWordWrap(True)
+
         layout.addWidget(self.plot)
+        layout.addWidget(self.label_plot_context)
+        layout.addWidget(self.label_marker_legend)
         return box
 
     def _build_history_panel(self) -> QtWidgets.QGroupBox:
@@ -262,13 +371,20 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             ]
         )
         self.history_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.history_table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.history_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.history_table.horizontalHeader().setStretchLastSection(True)
+        self.history_table.itemSelectionChanged.connect(self.on_history_selection_changed)
 
         self.label_history = QtWidgets.QLabel("Registros: 0")
+        self.label_history_hint = QtWidgets.QLabel(
+            "Tip: selecciona una o varias filas para cargar comparativo en la gráfica."
+        )
+        self.label_history_hint.setWordWrap(True)
 
         layout.addWidget(self.history_table)
         layout.addWidget(self.label_history)
+        layout.addWidget(self.label_history_hint)
         return box
 
     def _build_log_panel(self) -> QtWidgets.QGroupBox:
@@ -290,6 +406,31 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.btn_start.setEnabled(not running)
         self.btn_cancel.setEnabled(running)
 
+    def _is_process_running(self) -> bool:
+        return bool(self.process and self.process.state() != QtCore.QProcess.NotRunning)
+
+    def _set_plot_live_mode(self) -> None:
+        self.curve_raw.show()
+        self.curve_filtered.show()
+        self.plot.setTitle("Pump Evaluation (en vivo)")
+        self.label_plot_context.setText(
+            "Modo gráfica: en vivo. Para comparar histórico, selecciona una o más filas abajo."
+        )
+
+    def _set_plot_history_mode(self, count: int) -> None:
+        self.curve_raw.hide()
+        self.curve_filtered.hide()
+        self.plot.setTitle("Pump Evaluation (comparativo histórico)")
+        self.label_plot_context.setText(
+            f"Modo gráfica: histórico comparativo ({count} curva(s) filtradas). "
+            "Selecciona varias filas para comparar."
+        )
+
+    def _clear_history_curves(self) -> None:
+        for curve in self.history_curves:
+            self.plot.removeItem(curve)
+        self.history_curves = []
+
     def _update_idle_state(self) -> None:
         self.card_top_pressure.setText("-")
         self.card_time_top_pressure.setText("-")
@@ -308,15 +449,22 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.filtered_values.clear()
         self.curve_raw.setData([], [])
         self.curve_filtered.setData([], [])
+        self._clear_history_curves()
         for marker in self.markers:
             self.plot.removeItem(marker)
         self.markers = []
 
-    def _add_marker(self, x_value: float, color: str) -> None:
+    def _add_marker(
+        self,
+        x_value: float,
+        color: str,
+        style: Any = QtCore.Qt.DashLine,
+        width: float = 1.2,
+    ) -> None:
         line = pg.InfiniteLine(
             pos=float(x_value),
             angle=90,
-            pen=pg.mkPen(color, width=1, style=QtCore.Qt.DashLine),
+            pen=pg.mkPen(color, width=width, style=style),
             movable=False,
         )
         self.plot.addItem(line)
@@ -324,13 +472,22 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
     def _build_command(self) -> list[str]:
         python_bin = sys.executable
+        chamber_mask = self._selected_chamber_mask()
         command = [
             python_bin,
             CORE_SCRIPT,
             "--pump-label",
             self.input_pump_label.text().strip(),
             "--chamber",
-            "7",
+            str(chamber_mask),
+            "--kp-pos",
+            f"{self.spin_kp_pos.value():.4f}",
+            "--ki-pos",
+            f"{self.spin_ki_pos.value():.4f}",
+            "--kp-neg",
+            f"{self.spin_kp_neg.value():.4f}",
+            "--ki-neg",
+            f"{self.spin_ki_neg.value():.4f}",
             "--target-pressure-kpa",
             f"{self.spin_target_pressure.value():.4f}",
             "--target-vacuum-kpa",
@@ -376,6 +533,15 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             )
             return
 
+        chamber_mask = self._selected_chamber_mask()
+        if chamber_mask == 0:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Cámara inválida",
+                "Selecciona al menos una cámara (A, B o C).",
+            )
+            return
+
         if not os.path.exists(CORE_SCRIPT):
             QtWidgets.QMessageBox.critical(self, "Core missing", f"No existe: {CORE_SCRIPT}")
             return
@@ -383,6 +549,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self._set_running(True)
         self.btn_export.setEnabled(False)
         self.label_run_status.setText("Estado: ejecutando...")
+        self._set_plot_live_mode()
         self._clear_plot()
         self._update_idle_state()
         self.text_output.clear()
@@ -455,6 +622,161 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 "Archivos exportados correctamente.",
             )
 
+    def _summary_to_raw_path(self, summary_csv: str | None) -> str | None:
+        summary_abs = self._to_abs_path(summary_csv)
+        if not summary_abs:
+            return None
+        filename = os.path.basename(summary_abs)
+        if not filename.startswith("pump_eval_summary_"):
+            return None
+        raw_name = filename.replace("pump_eval_summary_", "pump_eval_raw_", 1)
+        raw_abs = os.path.join(os.path.dirname(summary_abs), raw_name)
+        if os.path.exists(raw_abs):
+            return raw_abs
+        return None
+
+    def _load_raw_series(self, raw_csv_path: str) -> dict[str, Any] | None:
+        if not raw_csv_path or not os.path.exists(raw_csv_path):
+            return None
+
+        t_values: list[float] = []
+        raw_values: list[float] = []
+        filtered_values: list[float] = []
+        phase_starts: list[tuple[str, float]] = []
+        phase_ends: list[tuple[str, float]] = []
+
+        prev_phase = ""
+        prev_t = 0.0
+        has_prev = False
+
+        with open(raw_csv_path, newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                try:
+                    t_val = float((row.get("t_session_s", "") or "").strip())
+                    raw_val = float((row.get("pressure_raw_kpa", "") or "").strip())
+                    filtered_val = float((row.get("pressure_filtered_kpa", "") or "").strip())
+                except (TypeError, ValueError):
+                    continue
+
+                phase = str((row.get("phase", "") or "").strip())
+                if not has_prev:
+                    phase_starts.append((phase, t_val))
+                    has_prev = True
+                elif phase != prev_phase:
+                    phase_ends.append((prev_phase, prev_t))
+                    phase_starts.append((phase, t_val))
+
+                t_values.append(t_val)
+                raw_values.append(raw_val)
+                filtered_values.append(filtered_val)
+                prev_phase = phase
+                prev_t = t_val
+
+        if has_prev:
+            phase_ends.append((prev_phase, prev_t))
+
+        if not t_values:
+            return None
+
+        return {
+            "t": t_values,
+            "raw": raw_values,
+            "filtered": filtered_values,
+            "phase_starts": phase_starts,
+            "phase_ends": phase_ends,
+        }
+
+    def on_history_selection_changed(self) -> None:
+        if self._is_process_running():
+            return
+
+        selection_model = self.history_table.selectionModel()
+        if not selection_model:
+            return
+
+        selected_rows = sorted(index.row() for index in selection_model.selectedRows())
+        if not selected_rows:
+            self._clear_plot()
+            self._set_plot_live_mode()
+            return
+
+        max_rows = 6
+        if len(selected_rows) > max_rows:
+            selected_rows = selected_rows[:max_rows]
+            self._append_output(
+                f"Comparativo histórico limitado a {max_rows} filas para mantener claridad."
+            )
+
+        self._clear_plot()
+        self._set_plot_history_mode(len(selected_rows))
+
+        palette = [
+            "#FFB703",
+            "#00A6FB",
+            "#FB5607",
+            "#2A9D8F",
+            "#8338EC",
+            "#EF476F",
+        ]
+
+        loaded_count = 0
+        first_loaded: dict[str, Any] | None = None
+        for idx, row_idx in enumerate(selected_rows):
+            if row_idx < 0 or row_idx >= len(self.history_rows):
+                continue
+            row = self.history_rows[row_idx]
+            summary_csv = row.get("summary_csv", "")
+            raw_csv = self._summary_to_raw_path(summary_csv)
+            if not raw_csv:
+                continue
+
+            series = self._load_raw_series(raw_csv)
+            if not series:
+                continue
+
+            color = palette[idx % len(palette)]
+            label = row.get("pump_label", "") or f"row_{row_idx + 1}"
+            stamp = row.get("timestamp", "") or "sin_fecha"
+            curve = self.plot.plot(
+                series["t"],
+                series["filtered"],
+                pen=pg.mkPen(color, width=2),
+                name=f"{label} | {stamp}",
+            )
+            self.history_curves.append(curve)
+            loaded_count += 1
+            if first_loaded is None:
+                first_loaded = series
+
+        if loaded_count == 0:
+            self.label_plot_context.setText(
+                "Modo gráfica: histórico comparativo. No se encontraron CSV raw para la selección."
+            )
+            return
+
+        # Add phase boundaries from first selected row to avoid clutter.
+        if first_loaded is not None:
+            for _, t_val in first_loaded["phase_starts"]:
+                self._add_marker(
+                    t_val,
+                    "#3A86FF",
+                    style=QtCore.Qt.DashLine,
+                    width=1.1,
+                )
+            for _, t_val in first_loaded["phase_ends"]:
+                self._add_marker(
+                    t_val,
+                    "#6C757D",
+                    style=QtCore.Qt.DotLine,
+                    width=1.0,
+                )
+
+        self.label_plot_context.setText(
+            f"Modo gráfica: histórico comparativo ({loaded_count} curva(s) cargadas). "
+            "Selecciona varias filas para comparar visualmente."
+        )
+
     def _on_process_output(self) -> None:
         if not self.process:
             return
@@ -516,7 +838,12 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.card_phase.setText(phase)
             t = payload.get("t_session_s")
             if t is not None:
-                self._add_marker(float(t), "#3A86FF")
+                self._add_marker(
+                    float(t),
+                    "#3A86FF",
+                    style=QtCore.Qt.DashLine,
+                    width=1.2,
+                )
             return
 
         if event == "sample":
@@ -535,16 +862,31 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         if event == "target_cross":
             t = payload.get("t_session_s")
             if t is not None:
-                self._add_marker(float(t), "#2A9D8F")
+                self._add_marker(
+                    float(t),
+                    "#2A9D8F",
+                    style=QtCore.Qt.DashDotLine,
+                    width=1.3,
+                )
             return
 
         if event == "phase_end":
             end_t = payload.get("end_session_s")
             if end_t is not None:
-                self._add_marker(float(end_t), "#6C757D")
+                self._add_marker(
+                    float(end_t),
+                    "#6C757D",
+                    style=QtCore.Qt.DotLine,
+                    width=1.1,
+                )
             peak_t = payload.get("time_to_top_session_s")
             if peak_t is not None:
-                self._add_marker(float(peak_t), "#EF476F")
+                self._add_marker(
+                    float(peak_t),
+                    "#EF476F",
+                    style=QtCore.Qt.DashDotDotLine,
+                    width=1.2,
+                )
             return
 
         if event == "run_end":
@@ -613,6 +955,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         path = path_text if os.path.isabs(path_text) else os.path.join(BASE_DIR, path_text)
 
         if not os.path.exists(path):
+            self.history_rows = []
             self.history_table.setRowCount(0)
             self.label_history.setText("Registros: 0 (sin archivo)")
             return
@@ -632,6 +975,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             )
         )
 
+        self.history_rows = rows
         self.history_table.setRowCount(len(rows))
         current_label = self.input_pump_label.text().strip()
         for idx, row in enumerate(rows):

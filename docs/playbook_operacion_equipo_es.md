@@ -89,7 +89,7 @@ source /opt/ros/humble/setup.bash
 ### `./scripts/labctl gui pump-eval --foreground`
 - **Qué hace:** abre la GUI dedicada para evaluar bombas en protocolo dual (capacidad + target).
 - **Dónde corre:** host Linux con entorno gráfico (`DISPLAY` activo).
-- **Para qué está pensada:** selección de bomba ideal midiendo presión y vacío en `ABC` fijo (`active_chamber=7`).
+- **Para qué está pensada:** selección de bomba ideal midiendo presión y vacío sobre cámaras seleccionables A/B/C (bitmask `1..7`, default `ABC=7`).
 - **Uso típico:** comparar etiquetas de bomba (`pump_label`) y revisar ranking histórico por `score_final`.
 
 ### `./scripts/labctl smoke --profile default`
@@ -295,9 +295,11 @@ Comando:
 
 Flujo recomendado:
 1. Define `pump_label` (ej: `actuales`, `nuevas_v2`).
-2. Mantén cámara fija `ABC (7)` y configura targets.
-3. Ejecuta corrida dual y confirma estado `APTA/NO_APTA`.
-4. Repite con otra etiqueta y compara en histórico (solo `APTA`, ordenado por `score_final`).
+2. Selecciona cámaras A/B/C (por defecto `ABC (7)`) y configura targets.
+3. Ajusta ganancias PID (`Kp+`, `Ki+`, `Kp-`, `Ki-`) si vas a evaluar control cerrado.
+4. Ejecuta corrida dual y confirma estado `APTA/NO_APTA`.
+5. Repite con otra etiqueta y compara en histórico (solo `APTA`, ordenado por `score_final`).
+6. En el histórico, selecciona una o varias filas para ver comparativo visual de curvas en la gráfica.
 
 Archivos generados por sesión:
 - `experiments/YYYY-MM/pump_eval_raw_*.csv`

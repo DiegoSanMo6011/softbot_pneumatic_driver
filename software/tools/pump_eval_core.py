@@ -87,6 +87,10 @@ class AggregateMetrics:
     timeout_phase_s: float
     pwm_capacity: int
     filter_window: int
+    kp_pos: float
+    ki_pos: float
+    kp_neg: float
+    ki_neg: float
     apta: bool
     top_pressure_mean_kpa: float
     top_pressure_std_kpa: float
@@ -278,6 +282,23 @@ class PumpEvalRunner:
             self.rclpy = rclpy
             self.rclpy.init()
             self.bot = SoftBot()
+
+        self._apply_tuning()
+
+    def _apply_tuning(self) -> None:
+        tuning = {
+            "kp_pos": float(self.args.kp_pos),
+            "ki_pos": float(self.args.ki_pos),
+            "kp_neg": float(self.args.kp_neg),
+            "ki_neg": float(self.args.ki_neg),
+        }
+
+        if self.args.demo:
+            emit_event("tuning_applied", demo=True, **tuning)
+            return
+
+        self.bot.update_tuning(**tuning)
+        emit_event("tuning_applied", demo=False, **tuning)
 
     def close(self) -> None:
         try:
@@ -580,6 +601,10 @@ class PumpEvalRunner:
             timeout_phase_s=float(self.args.timeout_phase_s),
             pwm_capacity=int(self.args.pwm_capacity),
             filter_window=int(self.args.filter_window),
+            kp_pos=float(self.args.kp_pos),
+            ki_pos=float(self.args.ki_pos),
+            kp_neg=float(self.args.kp_neg),
+            ki_neg=float(self.args.ki_neg),
             apta=bool(apta),
             top_pressure_mean_kpa=top_pressure_mean,
             top_pressure_std_kpa=top_pressure_std,
@@ -618,6 +643,10 @@ class PumpEvalRunner:
             vent_s=self.args.vent_s,
             rest_s=self.args.rest_s,
             filter_window=self.args.filter_window,
+            kp_pos=self.args.kp_pos,
+            ki_pos=self.args.ki_pos,
+            kp_neg=self.args.kp_neg,
+            ki_neg=self.args.ki_neg,
             demo=bool(self.args.demo),
         )
 
@@ -882,9 +911,19 @@ def parse_args() -> argparse.Namespace:
         description="Dual pump evaluator: capacity and target performance in pressure and vacuum."
     )
     parser.add_argument("--pump-label", required=True, type=str)
-    parser.add_argument("--chamber", type=int, default=CHAMBER_ABC, choices=[CHAMBER_ABC])
+    parser.add_argument(
+        "--chamber",
+        type=int,
+        default=CHAMBER_ABC,
+        choices=[1, 2, 3, 4, 5, 6, 7],
+        help="Bitmask de cámaras a evaluar (A=1, B=2, C=4).",
+    )
     parser.add_argument("--target-pressure-kpa", type=float, default=25.0)
     parser.add_argument("--target-vacuum-kpa", type=float, default=-15.0)
+    parser.add_argument("--kp-pos", type=float, default=24.0)
+    parser.add_argument("--ki-pos", type=float, default=1500.0)
+    parser.add_argument("--kp-neg", type=float, default=-75.0)
+    parser.add_argument("--ki-neg", type=float, default=-750.0)
     parser.add_argument("--pwm-capacity", type=int, default=220)
     parser.add_argument("--timeout-phase-s", type=float, default=3.0)
     parser.add_argument("--runs", type=int, default=3)
@@ -902,10 +941,16 @@ def parse_args() -> argparse.Namespace:
 def validate_args(args: argparse.Namespace) -> None:
     if not args.pump_label or not str(args.pump_label).strip():
         raise SystemExit("--pump-label es obligatorio")
+    if int(args.chamber) < 1 or int(args.chamber) > 7:
+        raise SystemExit("--chamber debe estar en rango 1..7")
     if float(args.target_pressure_kpa) <= 0:
         raise SystemExit("--target-pressure-kpa debe ser > 0")
     if float(args.target_vacuum_kpa) >= 0:
         raise SystemExit("--target-vacuum-kpa debe ser < 0")
+    for key in ("kp_pos", "ki_pos", "kp_neg", "ki_neg"):
+        value = float(getattr(args, key))
+        if not math.isfinite(value):
+            raise SystemExit(f"--{key.replace('_', '-')} debe ser finito")
     if int(args.pwm_capacity) < 0 or int(args.pwm_capacity) > 255:
         raise SystemExit("--pwm-capacity debe estar en rango 0..255")
     if float(args.timeout_phase_s) <= 0:
