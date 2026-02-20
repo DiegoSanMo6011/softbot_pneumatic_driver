@@ -38,6 +38,10 @@ PHASES = (
 )
 
 
+class SafetyBreakError(RuntimeError):
+    """Raised when pressure exits configured safety envelope."""
+
+
 @dataclass
 class SamplePoint:
     run_idx: int
@@ -84,6 +88,8 @@ class AggregateMetrics:
     chamber: int
     target_pressure_kpa: float
     target_vacuum_kpa: float
+    safety_max_kpa: float
+    safety_min_kpa: float
     timeout_phase_s: float
     pwm_capacity: int
     filter_window: int
@@ -291,6 +297,8 @@ class PumpEvalRunner:
             "ki_pos": float(self.args.ki_pos),
             "kp_neg": float(self.args.kp_neg),
             "ki_neg": float(self.args.ki_neg),
+            "max_safe": float(self.args.safety_max_kpa),
+            "min_safe": float(self.args.safety_min_kpa),
         }
 
         if self.args.demo:
@@ -299,6 +307,44 @@ class PumpEvalRunner:
 
         self.bot.update_tuning(**tuning)
         emit_event("tuning_applied", demo=False, **tuning)
+
+    def _trigger_safety_break(
+        self,
+        *,
+        run_idx: int,
+        phase: str,
+        t_phase_s: float,
+        pressure_raw_kpa: float,
+        pressure_filtered_kpa: float,
+    ) -> None:
+        t_session_s = self._session_elapsed()
+        max_kpa = float(self.args.safety_max_kpa)
+        min_kpa = float(self.args.safety_min_kpa)
+
+        emit_event(
+            "safety_break",
+            run_idx=run_idx,
+            phase=phase,
+            t_session_s=t_session_s,
+            t_phase_s=t_phase_s,
+            pressure_raw_kpa=pressure_raw_kpa,
+            pressure_filtered_kpa=pressure_filtered_kpa,
+            safety_max_kpa=max_kpa,
+            safety_min_kpa=min_kpa,
+        )
+
+        try:
+            self.bot.stop()
+            self.bot.vent(chamber_id=self.args.chamber, duration_s=self.args.vent_s)
+            self.bot.stop()
+        except Exception:
+            pass
+
+        raise SafetyBreakError(
+            "Safety break activado: "
+            f"presion={pressure_filtered_kpa:.3f} kPa (raw={pressure_raw_kpa:.3f}) "
+            f"fuera de rango [{min_kpa:.3f}, {max_kpa:.3f}] kPa"
+        )
 
     def close(self) -> None:
         try:
@@ -425,6 +471,22 @@ class PumpEvalRunner:
                 pwm_main=pwm_main,
                 pwm_aux=pwm_aux,
             )
+
+            max_kpa = float(self.args.safety_max_kpa)
+            min_kpa = float(self.args.safety_min_kpa)
+            if (
+                pressure_raw >= max_kpa
+                or pressure_filtered >= max_kpa
+                or pressure_raw <= min_kpa
+                or pressure_filtered <= min_kpa
+            ):
+                self._trigger_safety_break(
+                    run_idx=run_idx,
+                    phase=phase,
+                    t_phase_s=t_phase_s,
+                    pressure_raw_kpa=pressure_raw,
+                    pressure_filtered_kpa=pressure_filtered,
+                )
 
             if phase in (PHASE_CAP_PRESSURE, PHASE_TARGET_PRESSURE):
                 if pressure_filtered > best_value:
@@ -598,6 +660,8 @@ class PumpEvalRunner:
             chamber=int(self.args.chamber),
             target_pressure_kpa=float(self.args.target_pressure_kpa),
             target_vacuum_kpa=float(self.args.target_vacuum_kpa),
+            safety_max_kpa=float(self.args.safety_max_kpa),
+            safety_min_kpa=float(self.args.safety_min_kpa),
             timeout_phase_s=float(self.args.timeout_phase_s),
             pwm_capacity=int(self.args.pwm_capacity),
             filter_window=int(self.args.filter_window),
@@ -637,6 +701,8 @@ class PumpEvalRunner:
             runs=self.args.runs,
             target_pressure_kpa=self.args.target_pressure_kpa,
             target_vacuum_kpa=self.args.target_vacuum_kpa,
+            safety_max_kpa=self.args.safety_max_kpa,
+            safety_min_kpa=self.args.safety_min_kpa,
             pwm_capacity=self.args.pwm_capacity,
             timeout_phase_s=self.args.timeout_phase_s,
             sample_ms=self.args.sample_ms,
@@ -920,6 +986,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--target-pressure-kpa", type=float, default=25.0)
     parser.add_argument("--target-vacuum-kpa", type=float, default=-15.0)
+    parser.add_argument("--safety-max-kpa", type=float, default=45.0)
+    parser.add_argument("--safety-min-kpa", type=float, default=-45.0)
     parser.add_argument("--kp-pos", type=float, default=24.0)
     parser.add_argument("--ki-pos", type=float, default=1500.0)
     parser.add_argument("--kp-neg", type=float, default=-75.0)
@@ -947,6 +1015,16 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--target-pressure-kpa debe ser > 0")
     if float(args.target_vacuum_kpa) >= 0:
         raise SystemExit("--target-vacuum-kpa debe ser < 0")
+    if not math.isfinite(float(args.safety_max_kpa)):
+        raise SystemExit("--safety-max-kpa debe ser finito")
+    if not math.isfinite(float(args.safety_min_kpa)):
+        raise SystemExit("--safety-min-kpa debe ser finito")
+    if float(args.safety_max_kpa) <= 0:
+        raise SystemExit("--safety-max-kpa debe ser > 0")
+    if float(args.safety_min_kpa) >= 0:
+        raise SystemExit("--safety-min-kpa debe ser < 0")
+    if float(args.safety_min_kpa) >= float(args.safety_max_kpa):
+        raise SystemExit("--safety-min-kpa debe ser menor que --safety-max-kpa")
     for key in ("kp_pos", "ki_pos", "kp_neg", "ki_neg"):
         value = float(getattr(args, key))
         if not math.isfinite(value):
@@ -1006,6 +1084,10 @@ def main() -> int:
     except KeyboardInterrupt:
         emit_event("cancelled", message="Interrupted by user")
         return 130
+    except SafetyBreakError as exc:
+        emit_event("error", kind="safety_break", message=str(exc))
+        print(f"SAFETY_BREAK: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:
         emit_event("error", message=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)

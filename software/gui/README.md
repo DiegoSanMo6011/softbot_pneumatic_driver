@@ -39,6 +39,7 @@ Incluye:
 - Protocolo dual por corrida: capacidad y tiempo a target en presión y vacío.
 - Selector de cámaras A/B/C (bitmask `1..7`, default `ABC=7`).
 - Ajuste de ganancias PID (`Kp+`, `Ki+`, `Kp-`, `Ki-`) antes de correr evaluación.
+- Safety break configurable por umbrales `Safety +max` / `Safety -min` (corte inmediato).
 - Curva en vivo de `kPa` cruda y filtrada (mediana deslizante configurable).
 - Comparativo histórico visual seleccionando una o varias filas de registro.
 - Guía explícita de líneas verticales de eventos (inicio/fin fase, target, tope).

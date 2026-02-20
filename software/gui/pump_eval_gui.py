@@ -44,6 +44,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
         self.last_summary_csv: str | None = None
         self.last_raw_csv: str | None = None
+        self.safety_break_triggered = False
 
         self.setWindowTitle("Pump Evaluator GUI (selección de cámaras)")
         self.resize(1400, 860)
@@ -133,6 +134,18 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.spin_target_vacuum.setValue(-15.0)
         self.spin_target_vacuum.setSuffix(" kPa")
 
+        self.spin_safety_max = QtWidgets.QDoubleSpinBox()
+        self.spin_safety_max.setRange(1.0, 120.0)
+        self.spin_safety_max.setDecimals(2)
+        self.spin_safety_max.setValue(45.0)
+        self.spin_safety_max.setSuffix(" kPa")
+
+        self.spin_safety_min = QtWidgets.QDoubleSpinBox()
+        self.spin_safety_min.setRange(-120.0, -1.0)
+        self.spin_safety_min.setDecimals(2)
+        self.spin_safety_min.setValue(-45.0)
+        self.spin_safety_min.setSuffix(" kPa")
+
         self.spin_pwm_capacity = QtWidgets.QSpinBox()
         self.spin_pwm_capacity.setRange(0, 255)
         self.spin_pwm_capacity.setValue(220)
@@ -204,6 +217,8 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.spin_ki_neg,
             self.spin_target_pressure,
             self.spin_target_vacuum,
+            self.spin_safety_max,
+            self.spin_safety_min,
             self.spin_pwm_capacity,
             self.spin_timeout_phase,
             self.spin_runs,
@@ -230,6 +245,8 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         form.addRow("Ki-", self.spin_ki_neg)
         form.addRow("Target presión", self.spin_target_pressure)
         form.addRow("Target vacío", self.spin_target_vacuum)
+        form.addRow("Safety +max", self.spin_safety_max)
+        form.addRow("Safety -min", self.spin_safety_min)
         form.addRow("PWM capacidad", self.spin_pwm_capacity)
         form.addRow("Timeout por fase", self.spin_timeout_phase)
         form.addRow("Runs", self.spin_runs)
@@ -343,7 +360,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
         self.label_marker_legend = QtWidgets.QLabel(
             "Líneas verticales: azul=inicio fase, gris=fin fase, "
-            "verde=cruce target, magenta=tope fase."
+            "verde=cruce target, magenta=tope fase, rojo=safety break."
         )
         self.label_marker_legend.setWordWrap(True)
 
@@ -492,6 +509,10 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             f"{self.spin_target_pressure.value():.4f}",
             "--target-vacuum-kpa",
             f"{self.spin_target_vacuum.value():.4f}",
+            "--safety-max-kpa",
+            f"{self.spin_safety_max.value():.4f}",
+            "--safety-min-kpa",
+            f"{self.spin_safety_min.value():.4f}",
             "--pwm-capacity",
             str(self.spin_pwm_capacity.value()),
             "--timeout-phase-s",
@@ -541,6 +562,13 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 "Selecciona al menos una cámara (A, B o C).",
             )
             return
+        if self.spin_safety_min.value() >= self.spin_safety_max.value():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Safety inválido",
+                "Safety -min debe ser menor que Safety +max.",
+            )
+            return
 
         if not os.path.exists(CORE_SCRIPT):
             QtWidgets.QMessageBox.critical(self, "Core missing", f"No existe: {CORE_SCRIPT}")
@@ -556,6 +584,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.process_buffer = ""
         self.last_summary_csv = None
         self.last_raw_csv = None
+        self.safety_break_triggered = False
 
         command = self._build_command()
         self._append_output(" ".join(command))
@@ -870,6 +899,22 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 )
             return
 
+        if event == "safety_break":
+            self.safety_break_triggered = True
+            t = payload.get("t_session_s")
+            if t is not None:
+                self._add_marker(
+                    float(t),
+                    "#E63946",
+                    style=QtCore.Qt.SolidLine,
+                    width=1.8,
+                )
+            self.card_phase.setText("SAFETY_BREAK")
+            self.card_apta.setText("NO_APTA")
+            pressure_txt = self._fmt_num(payload.get("pressure_filtered_kpa"), " kPa")
+            self.label_run_status.setText(f"Estado: SAFETY_BREAK ({pressure_txt})")
+            return
+
         if event == "phase_end":
             end_t = payload.get("end_session_s")
             if end_t is not None:
@@ -934,13 +979,20 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
         if event == "error":
             message = payload.get("message", "unknown")
+            if payload.get("kind") == "safety_break":
+                self.safety_break_triggered = True
+                self.card_phase.setText("SAFETY_BREAK")
+                self.card_apta.setText("NO_APTA")
             self.label_run_status.setText(f"Estado: error ({message})")
             return
 
     def _on_process_finished(self, exit_code: int, _exit_status: Any) -> None:
         self._on_process_output()
         self._set_running(False)
-        status = "OK" if exit_code == 0 else f"ERROR ({exit_code})"
+        if self.safety_break_triggered:
+            status = "SAFETY_BREAK"
+        else:
+            status = "OK" if exit_code == 0 else f"ERROR ({exit_code})"
         self.label_run_status.setText(f"Estado: finalizado {status}")
         self.process = None
         self.refresh_history()
