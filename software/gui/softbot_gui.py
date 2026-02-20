@@ -34,29 +34,31 @@ if SOFTWARE_DIR not in sys.path:
     sys.path.append(SOFTWARE_DIR)
 
 from sdk.protocol import (  # noqa: E402
+    CHAMBER_A,
+    CHAMBER_B,
     CHAMBER_BLOCKED,
+    CHAMBER_C,
     HW_MUX_CHAMBER_A,
     HW_MUX_CHAMBER_B,
     HW_PUMP_INFLATE_AUX,
     HW_PUMP_INFLATE_MAIN,
     HW_PUMP_SUCTION_AUX,
     HW_PUMP_SUCTION_MAIN,
-    HW_VALVE_BOOST,
+    HW_VALVE_CHAMBER_C,
     HW_VALVE_INFLATE,
     HW_VALVE_SUCTION,
     MODE_HARDWARE_DIAGNOSTIC,
     MODE_LABELS,
     MODE_PID_INFLATE,
-    MODE_PID_INFLATE_TURBO,
     MODE_PID_SUCTION,
     MODE_PWM_INFLATE,
     MODE_PWM_SUCTION,
     MODE_STOP,
-    MODE_TANK_FILL,
     MODE_VENT,
 )
 
 LOG_DIR = os.path.join(BASE_DIR, "experiments", "logs")
+PUMP_BENCH_SCRIPT = os.path.join(BASE_DIR, "software", "tools", "pump_swap_validation.py")
 
 MODE_OPTIONS = [
     ("0 - Stop", MODE_STOP),
@@ -77,9 +79,7 @@ class SoftBotNode(Node):
         self.topic_mode = "/pressure_mode"
         self.topic_setpoint = "/pressure_setpoint"
         self.topic_tuning = "/tuning_params"
-        self.topic_boost = "/boost_valve"
         self.topic_hwtest = "/hardware_test"
-        self.topic_tank_state = "/tank_state"
         self.topic_feedback = "/pressure_feedback"
         self.topic_debug = "/system_debug"
 
@@ -92,7 +92,6 @@ class SoftBotNode(Node):
             self.topic_tuning,
             10,
         )
-        self.pub_boost = self.create_publisher(Int8, self.topic_boost, 10)
         self.pub_hwtest = self.create_publisher(Int16, self.topic_hwtest, 10)
 
         # --- Suscriptores ---
@@ -126,12 +125,6 @@ class SoftBotNode(Node):
             self._cb_chamber,
             10,
         )
-        self.sub_tank_state = self.create_subscription(
-            Int8,
-            self.topic_tank_state,
-            self._cb_tank_state,
-            10,
-        )
 
         # --- Estado ---
         self.pressure_kpa = 0.0
@@ -141,7 +134,6 @@ class SoftBotNode(Node):
         self.pwm_main = 0
         self.pwm_aux = 0
         self.error_raw = 0
-        self.tank_state = 0
 
     def _cb_feedback(self, msg: Float32):
         self.pressure_kpa = float(msg.data)
@@ -162,16 +154,13 @@ class SoftBotNode(Node):
             self.error_raw = int(msg.data[2])
             self.mode = int(msg.data[3])
 
-    def _cb_tank_state(self, msg: Int8):
-        self.tank_state = int(msg.data)
-
     @staticmethod
     def _valid_chamber(chamber: int) -> bool:
-        return chamber in (0, 1, 2, 3)
+        return chamber in range(0, 8)
 
     def send_command(self, chamber: int, mode: int, setpoint: float):
         if not self._valid_chamber(int(chamber)):
-            raise ValueError(f"Camara invalida: {chamber}. Usa 0, 1, 2 o 3.")
+            raise ValueError(f"Camara invalida: {chamber}. Usa una mascara valida entre 0 y 7.")
         self.pub_chamber.publish(Int8(data=int(chamber)))
         self.pub_mode.publish(Int8(data=int(mode)))
         self.pub_setpoint.publish(Float32(data=float(setpoint)))
@@ -211,25 +200,6 @@ class SoftBotNode(Node):
             float(min_safe),
         ]
         self.pub_tuning.publish(msg)
-
-    def set_boost(self, enabled: bool, repeats: int = 3, interval_ms: int = 30):
-        msg = Int8(data=1 if enabled else 0)
-        self.pub_boost.publish(msg)
-        for i in range(1, max(1, int(repeats))):
-            QtCore.QTimer.singleShot(
-                interval_ms * i,
-                lambda m=msg: self.pub_boost.publish(m),
-            )
-
-    def fill_tank(self, target_kpa: float):
-        self.send_command_reliable(CHAMBER_BLOCKED, MODE_TANK_FILL, float(target_kpa))
-
-    def inflate_turbo(self, chamber_id: int, target_kpa: float):
-        self.send_command_reliable(
-            chamber_id,
-            MODE_PID_INFLATE_TURBO,
-            float(target_kpa),
-        )
 
     def vent(self, chamber_id: int, duration_ms: int):
         self.send_command_reliable(chamber_id, MODE_VENT, 0.0)
@@ -279,7 +249,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
 
         self.log_file = None
         self.log_writer = None
-        self.boost_enabled = False
+        self.bench_process = None
 
     def _build_ui(self):
         central = QtWidgets.QWidget()
@@ -290,8 +260,18 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         # --- Panel izquierdo: controles ---
         control_panel = QtWidgets.QVBoxLayout()
 
-        self.combo_chamber = QtWidgets.QComboBox()
-        self.combo_chamber.addItems(["0 - Bloqueo", "1 - Cámara A", "2 - Cámara B", "3 - A+B"])
+        chamber_box = QtWidgets.QGroupBox("Cámaras activas (/active_chamber bitmask)")
+        chamber_layout = QtWidgets.QHBoxLayout(chamber_box)
+        self.cb_chamber_a = QtWidgets.QCheckBox("A")
+        self.cb_chamber_b = QtWidgets.QCheckBox("B")
+        self.cb_chamber_c = QtWidgets.QCheckBox("C")
+        self.cb_chamber_a.setChecked(True)
+        self.cb_chamber_b.setChecked(True)
+        self.cb_chamber_c.setChecked(True)
+        chamber_layout.addWidget(self.cb_chamber_a)
+        chamber_layout.addWidget(self.cb_chamber_b)
+        chamber_layout.addWidget(self.cb_chamber_c)
+        chamber_layout.addStretch(1)
 
         self.combo_mode = QtWidgets.QComboBox()
         self.combo_mode.addItems([label for label, _ in MODE_OPTIONS])
@@ -303,34 +283,16 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.spin_setpoint.setValue(0.0)
 
         btn_send = QtWidgets.QPushButton("Enviar comando")
-        btn_turbo_pid = QtWidgets.QPushButton("Inflar Turbo+PID")
-        btn_turbo_pid.setToolTip("Flujo recomendado: pulso turbo automatico y entrada a PID.")
         btn_stop = QtWidgets.QPushButton("Stop")
         btn_estop = QtWidgets.QPushButton("E-STOP")
         btn_reset = QtWidgets.QPushButton("Reset gráficas")
         self.btn_log = QtWidgets.QPushButton("Iniciar log")
 
         btn_send.clicked.connect(self.on_send)
-        btn_turbo_pid.clicked.connect(self.on_turbo_pid)
         btn_stop.clicked.connect(self.on_stop)
         btn_estop.clicked.connect(self.on_estop)
         btn_reset.clicked.connect(self.on_reset)
         self.btn_log.clicked.connect(self.on_toggle_log)
-
-        # --- Tanque (Fill) ---
-        tank_box = QtWidgets.QGroupBox("Tanque (Fill)")
-        tank_layout = QtWidgets.QFormLayout(tank_box)
-        self.spin_tank_kpa = QtWidgets.QDoubleSpinBox()
-        self.spin_tank_kpa.setRange(0.0, 80.0)
-        self.spin_tank_kpa.setDecimals(2)
-        self.spin_tank_kpa.setValue(35.0)
-        btn_tank_fill = QtWidgets.QPushButton("Llenar tanque")
-        btn_tank_stop = QtWidgets.QPushButton("Detener llenado")
-        btn_tank_fill.clicked.connect(self.on_tank_fill)
-        btn_tank_stop.clicked.connect(self.on_tank_stop)
-        tank_layout.addRow("Objetivo kPa", self.spin_tank_kpa)
-        tank_layout.addRow(btn_tank_fill)
-        tank_layout.addRow(btn_tank_stop)
 
         # --- Venteo ---
         vent_box = QtWidgets.QGroupBox("Venteo (liberar presión)")
@@ -344,22 +306,6 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         vent_layout.addRow("Duración", self.spin_vent_ms)
         vent_layout.addRow(btn_vent)
 
-        # --- Boost ---
-        boost_box = QtWidgets.QGroupBox("BOOST manual (diagnóstico)")
-        boost_layout = QtWidgets.QFormLayout(boost_box)
-        self.btn_boost = QtWidgets.QPushButton("BOOST: OFF")
-        self.btn_boost.setCheckable(True)
-        self.spin_boost_ms = QtWidgets.QSpinBox()
-        self.spin_boost_ms.setRange(10, 2000)
-        self.spin_boost_ms.setValue(150)
-        self.spin_boost_ms.setSuffix(" ms")
-        btn_boost_pulse = QtWidgets.QPushButton("Pulso BOOST")
-        self.btn_boost.clicked.connect(self.on_boost_toggle)
-        btn_boost_pulse.clicked.connect(self.on_boost_pulse)
-        boost_layout.addRow(self.btn_boost)
-        boost_layout.addRow("Duración", self.spin_boost_ms)
-        boost_layout.addRow(btn_boost_pulse)
-
         # --- Hardware diag ---
         hw_box = QtWidgets.QGroupBox("Hardware test (componentes)")
         hw_layout = QtWidgets.QGridLayout(hw_box)
@@ -370,7 +316,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.cb_hw_suction_aux = QtWidgets.QCheckBox("Pump Suction Aux")
         self.cb_hw_valve_inflate = QtWidgets.QCheckBox("Valve Inflate")
         self.cb_hw_valve_suction = QtWidgets.QCheckBox("Valve Suction")
-        self.cb_hw_valve_boost = QtWidgets.QCheckBox("Valve Boost")
+        self.cb_hw_valve_chamber_c = QtWidgets.QCheckBox("Valve Chamber C (legacy BOOST pin)")
         self.cb_hw_mux_a = QtWidgets.QCheckBox("Mux A")
         self.cb_hw_mux_b = QtWidgets.QCheckBox("Mux B")
 
@@ -389,7 +335,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         hw_layout.addWidget(self.cb_hw_suction_aux, 1, 1)
         hw_layout.addWidget(self.cb_hw_valve_inflate, 2, 0)
         hw_layout.addWidget(self.cb_hw_valve_suction, 2, 1)
-        hw_layout.addWidget(self.cb_hw_valve_boost, 3, 0)
+        hw_layout.addWidget(self.cb_hw_valve_chamber_c, 3, 0)
         hw_layout.addWidget(self.cb_hw_mux_a, 3, 1)
         hw_layout.addWidget(self.cb_hw_mux_b, 4, 0)
         hw_layout.addWidget(QtWidgets.QLabel("PWM"), 4, 1)
@@ -441,27 +387,97 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         btn_tuning.clicked.connect(self.on_tuning)
         tuning_layout.addRow(btn_tuning)
 
+        # --- Benchmark bombas ---
+        bench_box = QtWidgets.QGroupBox("Benchmark bombas (competencia)")
+        bench_layout = QtWidgets.QGridLayout(bench_box)
+
+        self.input_bench_label = QtWidgets.QLineEdit("actuales")
+        self.combo_bench_mode = QtWidgets.QComboBox()
+        self.combo_bench_mode.addItem("PID inflado (mode 1)", "pid")
+
+        self.spin_bench_target = QtWidgets.QDoubleSpinBox()
+        self.spin_bench_target.setRange(1.0, 80.0)
+        self.spin_bench_target.setDecimals(2)
+        self.spin_bench_target.setValue(35.0)
+
+        self.spin_bench_runs = QtWidgets.QSpinBox()
+        self.spin_bench_runs.setRange(1, 50)
+        self.spin_bench_runs.setValue(5)
+
+        self.spin_bench_timeout_s = QtWidgets.QDoubleSpinBox()
+        self.spin_bench_timeout_s.setRange(0.5, 10.0)
+        self.spin_bench_timeout_s.setDecimals(2)
+        self.spin_bench_timeout_s.setValue(3.0)
+        self.spin_bench_timeout_s.setSuffix(" s")
+
+        self.spin_bench_sample_ms = QtWidgets.QSpinBox()
+        self.spin_bench_sample_ms.setRange(5, 500)
+        self.spin_bench_sample_ms.setValue(20)
+        self.spin_bench_sample_ms.setSuffix(" ms")
+
+        self.spin_bench_vent_s = QtWidgets.QDoubleSpinBox()
+        self.spin_bench_vent_s.setRange(0.0, 5.0)
+        self.spin_bench_vent_s.setDecimals(2)
+        self.spin_bench_vent_s.setValue(0.6)
+        self.spin_bench_vent_s.setSuffix(" s")
+
+        self.spin_bench_rest_s = QtWidgets.QDoubleSpinBox()
+        self.spin_bench_rest_s.setRange(0.0, 5.0)
+        self.spin_bench_rest_s.setDecimals(2)
+        self.spin_bench_rest_s.setValue(0.4)
+        self.spin_bench_rest_s.setSuffix(" s")
+
+        self.btn_bench_start = QtWidgets.QPushButton("Ejecutar benchmark")
+        self.btn_bench_stop = QtWidgets.QPushButton("Cancelar benchmark")
+        self.btn_bench_stop.setEnabled(False)
+        self.btn_bench_start.clicked.connect(self.on_benchmark_start)
+        self.btn_bench_stop.clicked.connect(self.on_benchmark_stop)
+
+        self.text_bench_output = QtWidgets.QPlainTextEdit()
+        self.text_bench_output.setReadOnly(True)
+        self.text_bench_output.setMinimumHeight(120)
+        self.text_bench_output.setPlaceholderText(
+            "Salida del benchmark de bombas. Se guarda CSV en experiments/."
+        )
+
+        bench_layout.addWidget(QtWidgets.QLabel("Etiqueta bombas"), 0, 0)
+        bench_layout.addWidget(self.input_bench_label, 0, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Modo"), 1, 0)
+        bench_layout.addWidget(self.combo_bench_mode, 1, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Target"), 2, 0)
+        bench_layout.addWidget(self.spin_bench_target, 2, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Runs"), 3, 0)
+        bench_layout.addWidget(self.spin_bench_runs, 3, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Timeout"), 4, 0)
+        bench_layout.addWidget(self.spin_bench_timeout_s, 4, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Sample"), 5, 0)
+        bench_layout.addWidget(self.spin_bench_sample_ms, 5, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Vent"), 6, 0)
+        bench_layout.addWidget(self.spin_bench_vent_s, 6, 1)
+        bench_layout.addWidget(QtWidgets.QLabel("Rest"), 7, 0)
+        bench_layout.addWidget(self.spin_bench_rest_s, 7, 1)
+        bench_layout.addWidget(self.btn_bench_start, 8, 0)
+        bench_layout.addWidget(self.btn_bench_stop, 8, 1)
+        bench_layout.addWidget(self.text_bench_output, 9, 0, 1, 2)
+
         # --- Estado ---
         self.label_status = QtWidgets.QLabel("Estado: ---")
         self.label_status.setWordWrap(True)
 
-        control_panel.addWidget(QtWidgets.QLabel("Cámara activa"))
-        control_panel.addWidget(self.combo_chamber)
+        control_panel.addWidget(chamber_box)
         control_panel.addWidget(QtWidgets.QLabel("Modo"))
         control_panel.addWidget(self.combo_mode)
         control_panel.addWidget(QtWidgets.QLabel("Setpoint (kPa o PWM)"))
         control_panel.addWidget(self.spin_setpoint)
         control_panel.addWidget(btn_send)
-        control_panel.addWidget(btn_turbo_pid)
         control_panel.addWidget(btn_stop)
         control_panel.addWidget(btn_estop)
         control_panel.addWidget(self.btn_log)
         control_panel.addWidget(btn_reset)
         control_panel.addWidget(tuning_box)
-        control_panel.addWidget(tank_box)
         control_panel.addWidget(vent_box)
-        control_panel.addWidget(boost_box)
         control_panel.addWidget(hw_box)
+        control_panel.addWidget(bench_box)
         control_panel.addWidget(self.label_status)
         control_panel.addStretch(1)
 
@@ -520,14 +536,9 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.curve_pwm_main.setData(self.t, self.pwm_main)
         self.curve_pwm_aux.setData(self.t, self.pwm_aux)
 
-        tank_map = {0: "IDLE", 1: "LLENANDO", 2: "LLENO", 3: "TIMEOUT"}
-        tank_txt = tank_map.get(self.node.tank_state, "N/A")
         mode_txt = MODE_LABELS.get(self.node.mode, str(self.node.mode))
-        boost_txt = (
-            "ON(auto)"
-            if self.node.mode == MODE_PID_INFLATE_TURBO
-            else ("ON" if self.boost_enabled else "OFF")
-        )
+        chamber_mask = int(self.node.chamber) & 0x07
+        chamber_txt = self._chamber_mask_label(chamber_mask)
 
         self.label_status.setText(
             f"P={self.node.pressure_kpa:.2f} kPa | "
@@ -535,8 +546,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
             f"PWM=({self.node.pwm_main},{self.node.pwm_aux}) | "
             f"Mode={self.node.mode} ({mode_txt}) | "
             f"Err={self.node.error_raw / 10.0:.2f} | "
-            f"Boost={boost_txt} | "
-            f"Tanque={tank_txt}"
+            f"ChMask={chamber_mask} ({chamber_txt})"
         )
 
         if self.log_writer:
@@ -552,37 +562,34 @@ class SoftBotGUI(QtWidgets.QMainWindow):
                 ]
             )
 
+    @staticmethod
+    def _chamber_mask_label(mask: int) -> str:
+        if mask <= 0:
+            return "BLOCKED"
+        labels = []
+        if mask & CHAMBER_A:
+            labels.append("A")
+        if mask & CHAMBER_B:
+            labels.append("B")
+        if mask & CHAMBER_C:
+            labels.append("C")
+        return "+".join(labels) if labels else "BLOCKED"
+
+    def _selected_chamber_mask(self) -> int:
+        mask = 0
+        if self.cb_chamber_a.isChecked():
+            mask |= CHAMBER_A
+        if self.cb_chamber_b.isChecked():
+            mask |= CHAMBER_B
+        if self.cb_chamber_c.isChecked():
+            mask |= CHAMBER_C
+        return mask
+
     def on_send(self):
-        chamber = self.combo_chamber.currentIndex()
+        chamber = self._selected_chamber_mask()
         mode = MODE_OPTIONS[self.combo_mode.currentIndex()][1]
         setpoint = self.spin_setpoint.value()
         self.node.send_command_reliable(chamber, mode, setpoint)
-
-    def on_turbo_pid(self):
-        chamber = self.combo_chamber.currentIndex()
-        setpoint = float(self.spin_setpoint.value())
-        if chamber == CHAMBER_BLOCKED:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Turbo+PID inválido",
-                "Selecciona una camara (A, B o A+B) para usar Turbo+PID.",
-            )
-            return
-        if setpoint <= 0.0:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Turbo+PID inválido",
-                "El setpoint debe ser mayor a 0 kPa para inflado turbo.",
-            )
-            return
-        if setpoint > 80.0:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Turbo+PID inválido",
-                "Turbo+PID usa setpoint en kPa. Usa un valor en el rango 0-80 kPa.",
-            )
-            return
-        self.node.inflate_turbo(chamber, setpoint)
 
     def on_mode_changed(self, index: int):
         mode = MODE_OPTIONS[index][1]
@@ -597,11 +604,9 @@ class SoftBotGUI(QtWidgets.QMainWindow):
 
     def on_stop(self):
         self.node.stop()
-        self._boost_pulse_off()
 
     def on_estop(self):
         self.node.e_stop()
-        self._boost_pulse_off()
 
     def on_reset(self):
         self.start_time = time.time()
@@ -612,40 +617,10 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.pwm_aux.clear()
         self.error.clear()
 
-    def on_tank_fill(self):
-        target = float(self.spin_tank_kpa.value())
-        self.node.set_boost(False)
-        self.boost_enabled = False
-        self.btn_boost.setChecked(False)
-        self.btn_boost.setText("BOOST: OFF")
-        self.node.fill_tank(target)
-
-    def on_tank_stop(self):
-        self.node.stop()
-
     def on_vent(self):
-        chamber = self.combo_chamber.currentIndex()
+        chamber = self._selected_chamber_mask()
         duration_ms = int(self.spin_vent_ms.value())
         self.node.vent(chamber, duration_ms)
-
-    def on_boost_toggle(self):
-        self.boost_enabled = bool(self.btn_boost.isChecked())
-        self.node.set_boost(self.boost_enabled)
-        self.btn_boost.setText("BOOST: ON" if self.boost_enabled else "BOOST: OFF")
-
-    def on_boost_pulse(self):
-        duration_ms = int(self.spin_boost_ms.value())
-        self.node.set_boost(True)
-        self.boost_enabled = True
-        self.btn_boost.setChecked(True)
-        self.btn_boost.setText("BOOST: ON")
-        QtCore.QTimer.singleShot(duration_ms, self._boost_pulse_off)
-
-    def _boost_pulse_off(self):
-        self.node.set_boost(False)
-        self.boost_enabled = False
-        self.btn_boost.setChecked(False)
-        self.btn_boost.setText("BOOST: OFF")
 
     def _hardware_mask_from_ui(self) -> int:
         mask = 0
@@ -661,8 +636,8 @@ class SoftBotGUI(QtWidgets.QMainWindow):
             mask |= HW_VALVE_INFLATE
         if self.cb_hw_valve_suction.isChecked():
             mask |= HW_VALVE_SUCTION
-        if self.cb_hw_valve_boost.isChecked():
-            mask |= HW_VALVE_BOOST
+        if self.cb_hw_valve_chamber_c.isChecked():
+            mask |= HW_VALVE_CHAMBER_C
         if self.cb_hw_mux_a.isChecked():
             mask |= HW_MUX_CHAMBER_A
         if self.cb_hw_mux_b.isChecked():
@@ -687,6 +662,126 @@ class SoftBotGUI(QtWidgets.QMainWindow):
             max_safe=self.max_safe.value(),
             min_safe=self.min_safe.value(),
         )
+
+    def _set_benchmark_running(self, running: bool):
+        self.btn_bench_start.setEnabled(not running)
+        self.btn_bench_stop.setEnabled(running)
+
+    def _append_benchmark_output(self, text: str):
+        cleaned = text.replace("\r", "\n")
+        for line in cleaned.splitlines():
+            self.text_bench_output.appendPlainText(line)
+        self.text_bench_output.ensureCursorVisible()
+
+    def on_benchmark_start(self):
+        if self.bench_process and self.bench_process.state() != QtCore.QProcess.NotRunning:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Benchmark en curso",
+                "Ya hay un benchmark ejecutandose. Espera a que termine o cancelalo.",
+            )
+            return
+
+        chamber = self._selected_chamber_mask()
+        if chamber == CHAMBER_BLOCKED:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Camara invalida",
+                "Selecciona al menos una camara (A, B o C) para correr benchmark de bombas.",
+            )
+            return
+
+        pump_label = self.input_bench_label.text().strip()
+        if not pump_label:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Etiqueta requerida",
+                "Define una etiqueta para identificar la configuracion de bombas.",
+            )
+            return
+
+        if not os.path.exists(PUMP_BENCH_SCRIPT):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Script no encontrado",
+                f"No existe: {PUMP_BENCH_SCRIPT}",
+            )
+            return
+
+        mode = self.combo_bench_mode.currentData() or "pid"
+        command = [
+            sys.executable,
+            PUMP_BENCH_SCRIPT,
+            "--pump-label",
+            pump_label,
+            "--mode",
+            str(mode),
+            "--target-kpa",
+            f"{self.spin_bench_target.value():.2f}",
+            "--chamber",
+            str(chamber),
+            "--runs",
+            str(self.spin_bench_runs.value()),
+            "--timeout-s",
+            f"{self.spin_bench_timeout_s.value():.2f}",
+            "--sample-ms",
+            str(self.spin_bench_sample_ms.value()),
+            "--vent-s",
+            f"{self.spin_bench_vent_s.value():.2f}",
+            "--rest-s",
+            f"{self.spin_bench_rest_s.value():.2f}",
+        ]
+
+        self.text_bench_output.clear()
+        self._append_benchmark_output("=== Benchmark bombas ===")
+        self._append_benchmark_output(" ".join(command))
+
+        self.bench_process = QtCore.QProcess(self)
+        self.bench_process.setProcessChannelMode(QtCore.QProcess.MergedChannels)
+        self.bench_process.readyReadStandardOutput.connect(self._on_benchmark_stdout)
+        self.bench_process.finished.connect(self._on_benchmark_finished)
+        self.bench_process.errorOccurred.connect(self._on_benchmark_error)
+        self._set_benchmark_running(True)
+        self.bench_process.start(command[0], command[1:])
+
+        if not self.bench_process.waitForStarted(1500):
+            self._set_benchmark_running(False)
+            QtWidgets.QMessageBox.critical(
+                self,
+                "No se pudo iniciar benchmark",
+                self.bench_process.errorString(),
+            )
+            self.bench_process = None
+
+    def _on_benchmark_stdout(self):
+        if not self.bench_process:
+            return
+        chunk = bytes(self.bench_process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        if chunk:
+            self._append_benchmark_output(chunk)
+
+    def _on_benchmark_finished(self, exit_code: int, _exit_status):
+        self._on_benchmark_stdout()
+        self._set_benchmark_running(False)
+        status = "OK" if exit_code == 0 else f"ERROR ({exit_code})"
+        self._append_benchmark_output(f"=== Benchmark finalizado: {status} ===")
+        self.bench_process = None
+
+    def _on_benchmark_error(self, _process_error):
+        if not self.bench_process:
+            return
+        self._append_benchmark_output(f"[qprocess] {self.bench_process.errorString()}")
+
+    def on_benchmark_stop(self):
+        if not self.bench_process:
+            return
+        if self.bench_process.state() == QtCore.QProcess.NotRunning:
+            return
+        self._append_benchmark_output("Cancelando benchmark...")
+        self.bench_process.terminate()
+        if not self.bench_process.waitForFinished(1500):
+            self.bench_process.kill()
+            self.bench_process.waitForFinished(1000)
 
     def on_toggle_log(self):
         if self.log_writer is None:
@@ -720,7 +815,7 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         except Exception:
             pass
         try:
-            self._boost_pulse_off()
+            self.on_benchmark_stop()
         except Exception:
             pass
         self.node.destroy_node()

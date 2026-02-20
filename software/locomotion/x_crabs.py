@@ -34,8 +34,6 @@ from sdk.softbot_interface import SoftBot
 # -----------------------------
 P_HIGH = 35.0  # kPa (Tracción fuerte)
 P_LOW = -15.0  # kPa (Levantamiento rápido)
-BOOST_ENABLE = False  # Activar turbo (válvula tanque)
-BOOST_PULSE_MS = 150.0  # Duración del pulso de boost (ms)
 
 # --- GANANCIAS ÓPTIMAS (RESULTADO DEL BARRIDO) ---
 OPTIMAL_KP_POS = 24.0
@@ -87,7 +85,6 @@ class Phase:
     tol: float = 4.0  # Tolerancia amplia para detectar "llegada" rápido
     settle_time: float = 0.05
     snap_ms: float = 0.0
-    boost_ms: float = 0.0
 
 
 # =========================================================
@@ -129,7 +126,6 @@ class StrategySyncAB(LocomotionStrategy):
                 tol=4.0,
                 settle_time=0.05,
                 snap_ms=50,
-                boost_ms=(BOOST_PULSE_MS if BOOST_ENABLE else 0.0),
             ),
         ]
 
@@ -153,7 +149,6 @@ class StrategySwim(LocomotionStrategy):
                 tol=4.0,  # Tolerancia alta para cambio rápido
                 settle_time=0.01,  # Sin pausa, movimiento continuo
                 snap_ms=0,  # Cero tiempo muerto
-                boost_ms=(BOOST_PULSE_MS if BOOST_ENABLE else 0.0),
             ),
             # FASE 2: B Tracciona (Infla) / A Recupera (Succiona)
             Phase(
@@ -166,7 +161,6 @@ class StrategySwim(LocomotionStrategy):
                 tol=4.0,
                 settle_time=0.01,
                 snap_ms=0,
-                boost_ms=(BOOST_PULSE_MS if BOOST_ENABLE else 0.0),
             ),
         ]
 
@@ -248,13 +242,6 @@ class PhaseRunner:
         self._snap_until = 0.0
         self._pending_snap = False
         self.arrival_time = None
-        self._boost_until = 0.0
-
-    def _set_boost(self, enabled: bool):
-        try:
-            self.bot.set_boost(enabled)
-        except Exception:
-            pass
 
     def set_strategy(self, strategy: LocomotionStrategy):
         self.stop()
@@ -271,7 +258,6 @@ class PhaseRunner:
             self.first_run = True
             self._within_since = None
             self._pending_snap = False
-            self._boost_until = 0.0
             print("▶️  GO!")
 
     def stop(self):
@@ -279,7 +265,6 @@ class PhaseRunner:
             print("\n🛑 STOP")
         self.running = False
         self.bot.stop()
-        self._set_boost(False)
 
     def tick(self):
         if not self.running:
@@ -291,7 +276,6 @@ class PhaseRunner:
         if self._pending_snap:
             if now < self._snap_until:
                 self.bot.stop()
-                self._set_boost(False)
                 return
             else:
                 self._pending_snap = False
@@ -302,7 +286,6 @@ class PhaseRunner:
                 self.first_run = True
                 self._within_since = None
                 self.arrival_time = None
-                self._boost_until = 0.0
 
         phase = self.phases[self.idx]
         elapsed = now - self.phase_start
@@ -324,10 +307,7 @@ class PhaseRunner:
                     time.sleep(0.05)
                     # 2. A Infla CONTROLADO (PID)
                     self.bot.set_chamber(CHAMBER_A)
-                    if phase.boost_ms > 0:
-                        self.bot.inflate_turbo(phase.target)
-                    else:
-                        self.bot.inflate(phase.target)
+                    self.bot.inflate(phase.target)
                 elif phase.name.startswith("PASO B"):
                     # 1. A Succiona RÁPIDO (PWM Directo 100%)
                     self.bot.set_chamber(CHAMBER_A)
@@ -335,35 +315,20 @@ class PhaseRunner:
                     time.sleep(0.05)
                     # 2. B Infla CONTROLADO (PID)
                     self.bot.set_chamber(CHAMBER_B)
-                    if phase.boost_ms > 0:
-                        self.bot.inflate_turbo(phase.target)
-                    else:
-                        self.bot.inflate(phase.target)
+                    self.bot.inflate(phase.target)
             else:
                 # Estándar para otros modos
                 self.bot.set_chamber(phase.chamber)
                 if phase.action == "inflate":
-                    if phase.boost_ms > 0:
-                        self.bot.inflate_turbo(phase.target)
-                    else:
-                        self.bot.inflate(phase.target)
+                    self.bot.inflate(phase.target)
                 elif phase.action == "suction":
                     self.bot.suction(phase.target)
                 elif phase.action == "stop":
                     self.bot.stop()
 
-            if phase.action != "inflate" and phase.boost_ms and phase.boost_ms > 0:
-                self._set_boost(True)
-                self._boost_until = now + (phase.boost_ms / 1000.0)
-
             self.first_run = False
             self._within_since = None
             return
-
-        # --- BOOST TIMEOUT ---
-        if self._boost_until and now >= self._boost_until:
-            self._set_boost(False)
-            self._boost_until = 0.0
 
         # --- CHEQUEO DE TÉRMINO ---
         in_target = False

@@ -6,7 +6,34 @@ Documento principal para operación en laboratorio, diagnóstico de hardware, ca
 - **Host Linux (PC del laboratorio):** aquí corres `labctl`, GUI, scripts Python y herramientas de desarrollo.
 - **ESP32 (firmware):** ejecuta el controlador neumático en tiempo real.
 - **micro-ROS Agent (Docker):** puente entre ROS 2 en Linux y la ESP32 por serial.
-- **GUI de hardware (`hardware gui`):** interfaz para validar conexión eléctrica/MOSFET y actuadores.
+- **GUI principal (`gui start`):** telemetría + control + benchmark de bombas para experimentación.
+- **GUI de hardware (`hardware gui`):** interfaz dedicada para validar conexión eléctrica/MOSFET y actuadores.
+- **GUI de evaluación de bombas (`gui pump-eval`):** caracterización dedicada de presión + vacío y ranking histórico.
+
+## 1.1) GUIs: qué hace cada una y cómo correrla
+### GUI principal (`gui start`)
+- **Qué hace:** control general (PID/PWM/vent), telemetría en vivo y benchmark básico.
+- **Cuándo usarla:** operación diaria, tuning rápido y monitoreo durante pruebas.
+- **Cómo correrla:**
+```bash
+./scripts/labctl gui start --foreground
+```
+
+### GUI de hardware (`hardware gui`)
+- **Qué hace:** diagnóstico eléctrico por componente (bombas, válvulas y mux) con enfoque MOSFET.
+- **Cuándo usarla:** validación previa de cableado/actuadores antes de locomoción.
+- **Cómo correrla:**
+```bash
+./scripts/labctl hardware gui --foreground
+```
+
+### GUI de evaluación de bomba (`gui pump-eval`)
+- **Qué hace:** evaluación dual de presión + vacío con métricas de tope/tiempo, estado `APTA` y ranking histórico.
+- **Cuándo usarla:** comparar etiquetas de bombas y decidir la bomba idónea.
+- **Cómo correrla:**
+```bash
+./scripts/labctl gui pump-eval --foreground
+```
 
 ## 2) Flujo oficial y propósito de cada comando
 ```bash
@@ -17,6 +44,7 @@ source /opt/ros/humble/setup.bash
 ./scripts/labctl firmware flash --profile default --port /dev/ttyUSB0
 ./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
 ./scripts/labctl hardware gui --foreground
+./scripts/labctl gui start --foreground
 ./scripts/labctl smoke --profile default
 ```
 
@@ -52,17 +80,34 @@ source /opt/ros/humble/setup.bash
 - **Para qué está pensada:** validar que cada salida eléctrica/actuador responde como esperado antes de experimentar locomoción.
 - **Uso típico:** chequeo rápido pre-demo/pre-entrenamiento.
 
+### `./scripts/labctl gui start --foreground`
+- **Qué hace:** abre la GUI principal de telemetría/control.
+- **Dónde corre:** host Linux con entorno gráfico (`DISPLAY` activo).
+- **Para qué está pensada:** experimentación de control y locomoción (incluye panel de benchmark de bombas).
+- **Uso típico:** ajustar setpoints/tuning, ver telemetría en vivo y correr pruebas comparativas de bombas.
+
+### `./scripts/labctl gui pump-eval --foreground`
+- **Qué hace:** abre la GUI dedicada para evaluar bombas en protocolo dual (capacidad + target).
+- **Dónde corre:** host Linux con entorno gráfico (`DISPLAY` activo).
+- **Para qué está pensada:** selección de bomba ideal midiendo presión y vacío en `ABC` fijo (`active_chamber=7`).
+- **Uso típico:** comparar etiquetas de bomba (`pump_label`) y revisar ranking histórico por `score_final`.
+
 ### `./scripts/labctl smoke --profile default`
 - **Qué hace:** ejecuta secuencia segura mínima de comandos de control.
 - **Dónde corre:** host Linux (publica por ROS 2).
 - **Para qué:** sanity check de pipeline completo.
 - **Nota:** puede “pasar” aunque no haya hardware real si la ruta de control no está verificando respuesta física.
 
+### `./scripts/labctl benchmark pumps --pump-label <label> ...`
+- **Qué hace:** corre benchmark repetible de tiempo a presión objetivo para comparar setups de bombas.
+- **Dónde corre:** host Linux (publica por ROS 2).
+- **Para qué está pensada:** validar rápido si un cambio de bombas mejora tiempo de llegada sin perder control.
+
 ## 3) Catálogo completo de scripts (`scripts/`)
 ### `./scripts/labctl`
 - **Qué hace:** wrapper principal de la plataforma. Ejecuta `software/cli/labctl.py`.
 - **Dónde corre:** host Linux.
-- **Para qué:** punto único de operación diaria (doctor, firmware, agent, gui, hardware, smoke, stop).
+- **Para qué:** punto único de operación diaria (doctor, firmware, agent, gui, benchmark, hardware, smoke, stop).
 
 ### `./scripts/install_lab.sh`
 - **Qué hace:** instala dependencias de plataforma (modo online/offline).
@@ -138,14 +183,14 @@ ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 dmesg | tail -n 50
 ```
 
-## 5) Requisitos para que la GUI funcione con hardware real
-La GUI puede abrir aunque no haya conexión real, pero para que **controle la ESP32** debe existir este camino activo:
+## 5) Requisitos para que las GUIs funcionen con hardware real
+Las GUIs pueden abrir aunque no haya conexión real, pero para que **controlen la ESP32** debe existir este camino activo:
 1. ESP32 conectada por USB y puerto detectado.
 2. Firmware cargado en la ESP32.
 3. `agent start` corriendo con el puerto correcto.
 4. GUI abierta en sesión gráfica (`DISPLAY` válido).
 
-Secuencia recomendada:
+Secuencia recomendada de arranque:
 ```bash
 PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
 ./scripts/labctl firmware flash --profile default --port "$PORT"
@@ -155,17 +200,27 @@ PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
 
 Si no corre `agent start`, la GUI abre pero no tendrá puente ROS2<->ESP32 activo.
 
+Para abrir la GUI principal de control (en otra terminal):
+```bash
+./scripts/labctl gui start --foreground
+```
+
+Resumen de uso recomendado:
+- `hardware gui`: primero, para validar electrónica y actuadores.
+- `gui start`: después, para telemetría/control/experimentos.
+
 Verificación rápida del puente:
 ```bash
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=0
 ros2 node list
-ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber|tank_state"
+ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber"
 ```
 
 Resultado esperado con sistema activo:
 - Nodo `soft_robot_node` visible.
 - Tópicos de control/telemetría visibles (`/pressure_mode`, `/hardware_test`, `/system_debug`, etc.).
+- Selección de cámara por bitmask en `/active_chamber`: `A=1`, `B=2`, `C=4`, combinaciones hasta `7`.
 
 ## 6) Diagnóstico de hardware (intención y secuencia)
 Comando recomendado:
@@ -197,9 +252,80 @@ Test robusto recomendado (contrato ROS de firmware + `system_debug`):
 
 Qué valida `hardware verify`:
 1. Existe el nodo de firmware `soft_robot_node`.
-2. Existen tópicos de telemetría esperados y tienen publisher (`/pressure_feedback`, `/system_debug`, `/tank_state`).
+2. Existen tópicos de telemetría esperados y tienen publisher (`/pressure_feedback`, `/system_debug`).
 3. Existen tópicos de comando esperados y tienen subscriber del firmware.
 4. Llega al menos un mensaje real en `/system_debug` (si no usas `--no-system-debug-sample`).
+
+## 6.1) Benchmark de bombas para competencia (antes/después del cambio)
+Objetivo:
+- Medir si las bombas nuevas llegan más rápido al mismo target de presión.
+- Dejar evidencia en CSV para decisión técnica rápida.
+
+Flujo recomendado:
+1. Corre baseline con bombas actuales.
+2. Cambia bombas.
+3. Repite exactamente la misma prueba con nueva etiqueta.
+4. Compara `time_to_target_mean_s` y `rise_t10_90_mean_s`.
+
+Comandos ejemplo (misma configuración para comparar):
+```bash
+./scripts/labctl benchmark pumps --pump-label actuales --mode pid --chamber 7 --target-kpa 35 --runs 7
+./scripts/labctl benchmark pumps --pump-label nuevas_v1 --mode pid --chamber 7 --target-kpa 35 --runs 7
+```
+
+Archivos que genera:
+- `experiments/YYYY-MM/pump_bench_raw_*.csv`
+- `experiments/YYYY-MM/pump_bench_summary_*.csv`
+- `experiments/pump_benchmark_registry.csv` (histórico acumulado)
+
+Alternativa por GUI principal:
+1. Abre `./scripts/labctl gui start --foreground`.
+2. En panel **Benchmark bombas (competencia)** define etiqueta (`actuales`, `nuevas_v1`, etc).
+3. Ejecuta benchmark y guarda resultados automáticos en `experiments/`.
+
+## 6.2) Evaluación dual de bomba (presión + vacío) con GUI dedicada
+Objetivo:
+- Seleccionar bomba con métricas de tope y tiempo tanto en presión como en vacío.
+- Usar score balanceado con penalización por variabilidad entre corridas.
+
+Comando:
+```bash
+./scripts/labctl gui pump-eval --foreground
+```
+
+Flujo recomendado:
+1. Define `pump_label` (ej: `actuales`, `nuevas_v2`).
+2. Mantén cámara fija `ABC (7)` y configura targets.
+3. Ejecuta corrida dual y confirma estado `APTA/NO_APTA`.
+4. Repite con otra etiqueta y compara en histórico (solo `APTA`, ordenado por `score_final`).
+
+Archivos generados por sesión:
+- `experiments/YYYY-MM/pump_eval_raw_*.csv`
+- `experiments/YYYY-MM/pump_eval_summary_*.csv`
+- `experiments/pump_eval_registry.csv`
+
+## 6.3) Experimentación de locomoción con `x_crabs` + GUI
+Para seguir iterando en `software/locomotion/x_crabs.py` con telemetría visual:
+
+Terminal 1:
+```bash
+PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
+./scripts/labctl agent start --profile default --port "$PORT" --baud 115200
+```
+
+Terminal 2:
+```bash
+./scripts/labctl gui start --foreground
+```
+
+Terminal 3:
+```bash
+python3 software/locomotion/x_crabs.py
+```
+
+Regla operativa:
+- Si `x_crabs.py` está mandando comandos, evita enviar comandos simultáneos desde la GUI.
+- Usa la GUI principalmente para observar telemetría/log durante la ejecución de estrategias.
 
 ## 7) Troubleshooting esencial
 ## Docker daemon no reachable
@@ -225,6 +351,7 @@ exec su -l $USER
 ## GUI no abre
 ```bash
 ./scripts/labctl hardware gui --foreground
+./scripts/labctl gui start --foreground
 echo "$XDG_SESSION_TYPE $DISPLAY"
 ```
 
@@ -251,14 +378,14 @@ export ROS_DOMAIN_ID=0
 ros2 daemon stop
 ros2 daemon start
 ros2 node list
-ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber|tank_state"
+ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber"
 ```
 
 Notas importantes:
 - El mensaje `No such container: softbot_microros_agent` al arrancar `agent start` es normal (intenta borrar el contenedor anterior).
 - Si el firmware arrancó sin agent disponible, puede requerir reset físico de la ESP32 para registrar correctamente el nodo.
 
-## Cómo confirmar que la GUI sí envía señal a bombas/MOSFET
+## Cómo confirmar que la GUI de hardware sí envía señal a bombas/MOSFET
 Abrir monitoreo ROS mientras operas la GUI:
 ```bash
 source /opt/ros/humble/setup.bash

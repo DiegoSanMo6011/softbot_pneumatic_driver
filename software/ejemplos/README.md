@@ -11,5 +11,5 @@ Estos scripts usan el SDK en `software/sdk/`.
 Notas:
 - `02_Identificacion_Sistema.py`: barrido multi-escalón.
 - `02a_Identificacion_Escalon_Simple.py`: escalón único.
-- `08_boost_test.py`: prueba de válvula BOOST (tanque).
-- `09_tank_fill.py`: llenado automático del tanque (modo 3).
+- `08_boost_test.py`: prueba de habilitación de Cámara C (pin legacy BOOST).
+- `09_tank_fill.py`: prueba secuencial de máscaras de cámara A/B/C.

@@ -6,7 +6,7 @@ Archivo:
 software/locomotion/x_crabs.py
 ```
 
-Incluye un **motor de fases** con transición por tolerancia y tiempos mínimos/máximos.
+Incluye un motor de fases con transición por tolerancia y tiempos mínimos/máximos.
 
 ## 2. Estrategias actuales
 - **SYNC AB (Saltar)**: succión + inflado sincronizado de ambas cámaras.
@@ -22,21 +22,24 @@ Incluye un **motor de fases** con transición por tolerancia y tiempos mínimos/
 - `snap_ms` (freno breve entre fases)
 
 ## 4. Notas de operación
-- El **modo salto** es el foco principal de la competencia.
-- Existe un **límite físico de brusquedad**; por eso se planea integrar tanque + válvula 2/2 como “turbo”.
+- El modo salto es foco principal de competencia.
+- La selección de cámara ahora usa bitmask A/B/C (`/active_chamber` 0..7).
+- `x_crabs.py` opera en modos PID/PWM/VENT sin rutas turbo/tank-fill.
 - Se recomienda registrar datos durante cada cambio de estrategia.
-
-## 6. BOOST (tanque)
-En `software/locomotion/x_crabs.py` puedes activar el boost:
-- `BOOST_ENABLE = True`
-- `BOOST_PULSE_MS = 150.0`
-
-Con `BOOST_ENABLE = True`, las fases de inflado seleccionadas usan
-`inflate_turbo()` (modo `5`), que ejecuta turbo pre-PID en firmware y luego
-cae automáticamente a PID inflado.
 
 ## 5. Script alterno
 ```
 software/locomotion/locomocion_ab.py
 ```
 Loop automático sincronizado (A+B) con asentamiento.
+
+## 6. Flujo recomendado para experimentar con `x_crabs`
+En 3 terminales:
+1. `./scripts/labctl agent start --profile default --port <PORT> --baud 115200`
+2. `./scripts/labctl gui start --foreground` (telemetría/log y benchmark)
+3. `python3 software/locomotion/x_crabs.py`
+
+Notas:
+- Si `x_crabs.py` está controlando, evita mandar comandos simultáneos desde GUI.
+- Para comparar bombas (actuales vs nuevas), corre `./scripts/labctl benchmark pumps ...`
+  antes y después del cambio.

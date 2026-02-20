@@ -28,7 +28,7 @@
 // ==========================================
 const int PIN_VALVE_INFLATE = 25;
 const int PIN_VALVE_SUCTION = 26;
-const int PIN_VALVE_BOOST = 23;
+const int PIN_VALVE_CHAMBER_C = 23; // Legacy BOOST pin reused for chamber C gating.
 const int PIN_MUX_CHAMBER_A = 32;
 const int PIN_MUX_CHAMBER_B = 33;
 
@@ -55,9 +55,7 @@ const int8_t MODE_PID_INFLATE = 1;
 const int8_t MODE_PID_SUCTION = -1;
 const int8_t MODE_PWM_INFLATE = 2;
 const int8_t MODE_PWM_SUCTION = -2;
-const int8_t MODE_TANK_FILL = 3;
 const int8_t MODE_VENT = 4;
-const int8_t MODE_PID_INFLATE_TURBO = 5;
 const int8_t MODE_HARDWARE_DIAGNOSTIC = 9;
 
 // Bitmask /hardware_test (modo 9)
@@ -67,7 +65,7 @@ const uint16_t HW_PUMP_SUCTION_MAIN = (1 << 2);
 const uint16_t HW_PUMP_SUCTION_AUX = (1 << 3);
 const uint16_t HW_VALVE_INFLATE = (1 << 4);
 const uint16_t HW_VALVE_SUCTION = (1 << 5);
-const uint16_t HW_VALVE_BOOST = (1 << 6);
+const uint16_t HW_VALVE_CHAMBER_C = (1 << 6);
 const uint16_t HW_MUX_CHAMBER_A = (1 << 7);
 const uint16_t HW_MUX_CHAMBER_B = (1 << 8);
 
@@ -96,7 +94,7 @@ const PumpOutputConfig DIAG_PUMP_OUTPUTS[] = {
 const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
     {HW_VALVE_INFLATE, PIN_VALVE_INFLATE},
     {HW_VALVE_SUCTION, PIN_VALVE_SUCTION},
-    {HW_VALVE_BOOST, PIN_VALVE_BOOST},
+    {HW_VALVE_CHAMBER_C, PIN_VALVE_CHAMBER_C},
     {HW_MUX_CHAMBER_A, PIN_MUX_CHAMBER_A},
     {HW_MUX_CHAMBER_B, PIN_MUX_CHAMBER_B},
 };
@@ -104,7 +102,7 @@ const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
 // UMBRALES DE AGRESIVIDAD
 // Si el error es mayor a esto, ignoramos el PID y damos 100%
 const float AGGRESSIVE_THRESHOLD = 5.0f;
-const int THRESHOLD_TURBO = 40;
+const int THRESHOLD_AUX_ENABLE = 40;
 
 const int PIN_I2C_SDA = 21;
 const int PIN_I2C_SCL = 22;
@@ -133,29 +131,11 @@ int8_t active_chamber = 0;
 
 bool emergency_stop_active = false;
 unsigned long last_control_timestamp = 0;
-bool boost_enabled = false;
 
 Adafruit_ADS1115 ads;
 const float V_OFFSET = 2.5f;
 const float V_SENSITIVITY = 0.02f;
 
-// ==========================================
-// 2.1 TANQUE (BOOST) - ESTADO
-// ==========================================
-const float TANK_TOL_KPA = 1.0f;        // tolerancia para considerar "lleno"
-const uint32_t TANK_STABLE_MS = 500;    // tiempo estable en tolerancia
-const uint32_t TANK_TIMEOUT_MS = 12000; // timeout de llenado
-
-bool tank_fill_active = false;
-bool tank_full_latched = false;
-uint32_t tank_fill_start_ms = 0;
-uint32_t tank_within_since_ms = 0;
-int8_t tank_state = 0; // 0=idle, 1=filling, 2=full, 3=timeout
-
-// Turbo pre-PID (modo 5)
-const uint32_t TURBO_PREFILL_MS = 150;
-bool turbo_prefill_active = false;
-uint32_t turbo_prefill_start_ms = 0;
 uint16_t hardware_test_mask = 0;
 
 // ==========================================
@@ -170,22 +150,18 @@ rcl_subscription_t sub_setpoint;
 rcl_subscription_t sub_mode;
 rcl_subscription_t sub_chamber;
 rcl_subscription_t sub_tuning;
-rcl_subscription_t sub_boost;
 rcl_subscription_t sub_hwtest;
 
 rcl_publisher_t pub_feedback;
 rcl_publisher_t pub_debug;
-rcl_publisher_t pub_tank_state;
 
 std_msgs__msg__Float32 msg_setpoint;
 std_msgs__msg__Int8 msg_mode;
 std_msgs__msg__Int8 msg_chamber;
-std_msgs__msg__Int8 msg_boost;
 std_msgs__msg__Int16 msg_hwtest;
 std_msgs__msg__Float32MultiArray msg_tuning;
 std_msgs__msg__Float32 msg_feedback;
 std_msgs__msg__Int16MultiArray msg_debug;
-std_msgs__msg__Int8 msg_tank_state;
 
 int16_t debug_data[4];
 float tuning_buffer[6];
@@ -209,10 +185,10 @@ void fatal_error_loop(int code) {
     }                                                                                              \
   }
 
-void resetTurboPrefill();
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux);
 void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
                                     int16_t *active_aux);
+void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode);
 
 // ==========================================
 // FUNCIONES
@@ -264,6 +240,21 @@ void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active
   *active_aux = aux_pwm;
 }
 
+void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode) {
+  int8_t normalized = chamber_mask & 0x07;
+  if (vent_mode && normalized == 0) {
+    normalized = 0x07; // Vent all chambers when command asks for blocked chamber in VENT mode.
+  }
+
+  const bool chamber_a_enabled = (normalized & 0x01) != 0;
+  const bool chamber_b_enabled = (normalized & 0x02) != 0;
+  const bool chamber_c_enabled = (normalized & 0x04) != 0;
+
+  digitalWrite(PIN_MUX_CHAMBER_A, chamber_a_enabled ? HIGH : LOW);
+  digitalWrite(PIN_MUX_CHAMBER_B, chamber_b_enabled ? HIGH : LOW);
+  digitalWrite(PIN_VALVE_CHAMBER_C, chamber_c_enabled ? HIGH : LOW);
+}
+
 void triggerEmergencyStop() {
   ledcWrite(CH_INFLATE_MAIN, 0);
   ledcWrite(CH_INFLATE_AUX, 0);
@@ -271,18 +262,13 @@ void triggerEmergencyStop() {
   ledcWrite(CH_SUCCION_AUX, 0);
   digitalWrite(PIN_VALVE_INFLATE, HIGH);
   digitalWrite(PIN_VALVE_SUCTION, HIGH);
-  digitalWrite(PIN_VALVE_BOOST, LOW);
+  digitalWrite(PIN_VALVE_CHAMBER_C, LOW);
   digitalWrite(PIN_MUX_CHAMBER_A, HIGH);
   digitalWrite(PIN_MUX_CHAMBER_B, HIGH);
   delay(2000);
   stopActuators();
   emergency_stop_active = true;
   control_mode = 0;
-  boost_enabled = false;
-  tank_fill_active = false;
-  tank_full_latched = false;
-  tank_state = 0;
-  resetTurboPrefill();
 }
 
 float computePID_Positive(float error) {
@@ -299,11 +285,6 @@ float computePID_Negative(float error) {
   if (i_term < -PWM_MAX)
     integral_neg_sum = -PWM_MAX / Ki_neg;
   return (Kp_neg * error) + (Ki_neg * integral_neg_sum);
-}
-
-void resetTurboPrefill() {
-  turbo_prefill_active = false;
-  turbo_prefill_start_ms = 0;
 }
 
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux) {
@@ -323,7 +304,7 @@ void applyInflateControl(float error, int *pwm_main, int *pwm_aux) {
     *pwm_main = (int)pid_out;
   }
 
-  if (*pwm_main > THRESHOLD_TURBO) {
+  if (*pwm_main > THRESHOLD_AUX_ENABLE) {
     *pwm_aux = *pwm_main;
   } else {
     *pwm_aux = 0;
@@ -338,8 +319,13 @@ void cb_setpoint(const void *msgin) {
     setpoint_pressure = ((const std_msgs__msg__Float32 *)msgin)->data;
 }
 void cb_chamber(const void *msgin) {
-  if (!emergency_stop_active)
-    active_chamber = ((const std_msgs__msg__Int8 *)msgin)->data;
+  if (!emergency_stop_active) {
+    int8_t requested = ((const std_msgs__msg__Int8 *)msgin)->data;
+    if (requested < 0) {
+      requested = 0;
+    }
+    active_chamber = requested & 0x07;
+  }
 }
 
 void cb_mode(const void *msgin) {
@@ -350,42 +336,18 @@ void cb_mode(const void *msgin) {
     return;
 
   bool mode_changed = (m != control_mode);
-  if (m == MODE_STOP)
-    boost_enabled = false;
 
   if (mode_changed) {
     integral_pos_sum = 0;
     integral_neg_sum = 0;
   }
 
-  if (mode_changed && control_mode == MODE_PID_INFLATE_TURBO) {
-    resetTurboPrefill();
-  }
   if (mode_changed && control_mode == MODE_HARDWARE_DIAGNOSTIC) {
     hardware_test_mask = 0;
     stopActuators();
   }
 
   control_mode = m;
-
-  // Inicializar llenado de tanque si entra en modo 3
-  if (mode_changed && control_mode == MODE_TANK_FILL) {
-    tank_fill_active = true;
-    tank_full_latched = false;
-    tank_fill_start_ms = millis();
-    tank_within_since_ms = 0;
-    tank_state = 1;
-  }
-
-  if (mode_changed && control_mode == MODE_PID_INFLATE_TURBO) {
-    turbo_prefill_active = true;
-    turbo_prefill_start_ms = millis();
-    boost_enabled = false;
-  }
-
-  if (mode_changed && control_mode != MODE_TANK_FILL) {
-    tank_fill_active = false;
-  }
 }
 
 void cb_tuning(const void *msgin) {
@@ -400,17 +362,6 @@ void cb_tuning(const void *msgin) {
     integral_pos_sum = 0;
     integral_neg_sum = 0;
   }
-}
-
-void cb_boost(const void *msgin) {
-  if (emergency_stop_active) {
-    boost_enabled = false;
-    return;
-  }
-  if (control_mode == MODE_PID_INFLATE_TURBO && turbo_prefill_active)
-    return;
-  int8_t b = ((const std_msgs__msg__Int8 *)msgin)->data;
-  boost_enabled = (b != 0);
 }
 
 void cb_hwtest(const void *msgin) {
@@ -457,55 +408,16 @@ void controlLoop() {
     msg_debug.data.data = debug_data;
     msg_debug.data.size = 4;
     rcl_publish(&pub_debug, &msg_debug, NULL);
-
-    tank_state = 0;
-    msg_tank_state.data = tank_state;
-    rcl_publish(&pub_tank_state, &msg_tank_state, NULL);
     return;
   }
 
-  if (control_mode == MODE_STOP || active_chamber == 0) {
-    boost_enabled = false;
-  }
-  digitalWrite(PIN_VALVE_BOOST, boost_enabled ? HIGH : LOW);
-
-  // Selección de cámara (en llenado de tanque, siempre cerrado)
-  if (control_mode == MODE_TANK_FILL) {
-    digitalWrite(PIN_MUX_CHAMBER_A, LOW);
-    digitalWrite(PIN_MUX_CHAMBER_B, LOW);
-  } else {
-    int8_t chamber_sel = active_chamber;
-    if (control_mode == MODE_VENT && chamber_sel == 0) {
-      chamber_sel = 3; // en venteo, 0 => ventear ambas
-    }
-    switch (chamber_sel) {
-    case 1:
-      digitalWrite(PIN_MUX_CHAMBER_A, HIGH);
-      digitalWrite(PIN_MUX_CHAMBER_B, LOW);
-      break;
-    case 2:
-      digitalWrite(PIN_MUX_CHAMBER_A, LOW);
-      digitalWrite(PIN_MUX_CHAMBER_B, HIGH);
-      break;
-    case 3:
-      digitalWrite(PIN_MUX_CHAMBER_A, HIGH);
-      digitalWrite(PIN_MUX_CHAMBER_B, HIGH);
-      break;
-    default:
-      digitalWrite(PIN_MUX_CHAMBER_A, LOW);
-      digitalWrite(PIN_MUX_CHAMBER_B, LOW);
-      break;
-    }
-  }
+  applyChamberSelectionMask(active_chamber, control_mode == MODE_VENT);
 
   float error = setpoint_pressure - current_pressure;
   int pwm_main = 0;
   int pwm_aux = 0;
 
   if (control_mode == MODE_VENT) { // VENTEAR (liberar presion a atmosfera)
-    boost_enabled = false;
-    digitalWrite(PIN_VALVE_BOOST, LOW);
-
     // Bombas apagadas
     ledcWrite(CH_INFLATE_MAIN, 0);
     ledcWrite(CH_INFLATE_AUX, 0);
@@ -515,87 +427,10 @@ void controlLoop() {
     // Válvulas desenergizadas (A->R abierto / P cerrado)
     digitalWrite(PIN_VALVE_INFLATE, LOW);
     digitalWrite(PIN_VALVE_SUCTION, LOW);
-  } else if (control_mode == MODE_STOP || (active_chamber == 0 && control_mode != MODE_TANK_FILL)) {
+  } else if (control_mode == MODE_STOP || (active_chamber == 0 && control_mode != MODE_VENT)) {
     stopActuators();
     integral_pos_sum = 0;
     integral_neg_sum = 0;
-    resetTurboPrefill();
-  } else if (control_mode == MODE_TANK_FILL) { // LLENAR TANQUE (modo especial)
-    // Siempre cerrar boost durante el llenado
-    boost_enabled = false;
-    digitalWrite(PIN_VALVE_BOOST, LOW);
-
-    digitalWrite(PIN_VALVE_INFLATE, HIGH);
-    digitalWrite(PIN_VALVE_SUCTION, LOW);
-    ledcWrite(CH_SUCCION_MAIN, 0);
-    ledcWrite(CH_SUCCION_AUX, 0);
-
-    if (error > AGGRESSIVE_THRESHOLD) {
-      pwm_main = 255;
-      pwm_aux = 255;
-      integral_pos_sum = 0;
-    } else {
-      float pid_out = computePID_Positive(error);
-      if (pid_out < 0)
-        pid_out = 0;
-      if (pid_out > PWM_MAX)
-        pwm_main = PWM_MAX;
-      else
-        pwm_main = (int)pid_out;
-      if (pwm_main > THRESHOLD_TURBO)
-        pwm_aux = pwm_main;
-      else
-        pwm_aux = 0;
-    }
-
-    ledcWrite(CH_INFLATE_MAIN, pwm_main);
-    ledcWrite(CH_INFLATE_AUX, pwm_aux);
-
-    // Estado de llenado
-    if (fabs(error) <= TANK_TOL_KPA) {
-      if (tank_within_since_ms == 0)
-        tank_within_since_ms = millis();
-      if (millis() - tank_within_since_ms >= TANK_STABLE_MS) {
-        tank_state = 2; // full
-        tank_full_latched = true;
-        control_mode = MODE_STOP; // detener
-        resetTurboPrefill();
-        tank_fill_active = false;
-        stopActuators();
-      }
-    } else {
-      tank_within_since_ms = 0;
-      tank_state = 1;
-    }
-
-    if ((millis() - tank_fill_start_ms) >= TANK_TIMEOUT_MS) {
-      tank_state = 3; // timeout
-      control_mode = MODE_STOP;
-      resetTurboPrefill();
-      tank_fill_active = false;
-      stopActuators();
-    }
-  } else if (control_mode == MODE_PID_INFLATE_TURBO) {
-    digitalWrite(PIN_VALVE_INFLATE, HIGH);
-    digitalWrite(PIN_VALVE_SUCTION, LOW);
-    ledcWrite(CH_SUCCION_MAIN, 0);
-    ledcWrite(CH_SUCCION_AUX, 0);
-
-    if (turbo_prefill_active && (millis() - turbo_prefill_start_ms) < TURBO_PREFILL_MS) {
-      digitalWrite(PIN_VALVE_BOOST, HIGH);
-      pwm_main = PWM_MAX;
-      pwm_aux = PWM_MAX;
-      integral_pos_sum = 0;
-    } else {
-      resetTurboPrefill();
-      boost_enabled = false;
-      digitalWrite(PIN_VALVE_BOOST, LOW);
-      control_mode = MODE_PID_INFLATE;
-      applyInflateControl(error, &pwm_main, &pwm_aux);
-    }
-
-    ledcWrite(CH_INFLATE_MAIN, pwm_main);
-    ledcWrite(CH_INFLATE_AUX, pwm_aux);
   } else if (control_mode == MODE_PID_INFLATE) { // INFLAR (MAX ATTACK)
     digitalWrite(PIN_VALVE_INFLATE, HIGH);
     digitalWrite(PIN_VALVE_SUCTION, LOW);
@@ -623,7 +458,7 @@ void controlLoop() {
       else
         pwm_main = (int)pid_out;
 
-      if (pwm_main > THRESHOLD_TURBO)
+      if (pwm_main > THRESHOLD_AUX_ENABLE)
         pwm_aux = pwm_main;
       else
         pwm_aux = 0;
@@ -637,7 +472,7 @@ void controlLoop() {
     pwm_main = constrain((int)setpoint_pressure, 0, 255);
 
     // Espejo Directo en Manual
-    if (pwm_main > THRESHOLD_TURBO)
+    if (pwm_main > THRESHOLD_AUX_ENABLE)
       pwm_aux = pwm_main;
     else
       pwm_aux = 0;
@@ -666,13 +501,6 @@ void controlLoop() {
   msg_debug.data.data = debug_data;
   msg_debug.data.size = 4;
   rcl_publish(&pub_debug, &msg_debug, NULL);
-
-  // Publicar estado del tanque
-  if (control_mode != MODE_TANK_FILL && !tank_full_latched && !tank_fill_active) {
-    tank_state = 0; // idle
-  }
-  msg_tank_state.data = tank_state;
-  rcl_publish(&pub_tank_state, &msg_tank_state, NULL);
 }
 
 // ==========================================
@@ -715,8 +543,6 @@ void setup() {
       &sub_tuning, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
       "tuning_params"));
   RCCHECK(rclc_subscription_init_default(
-      &sub_boost, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int8), "boost_valve"));
-  RCCHECK(rclc_subscription_init_default(
       &sub_hwtest, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16), "hardware_test"));
 
   RCCHECK(rclc_publisher_init_default(&pub_feedback, &node,
@@ -725,8 +551,6 @@ void setup() {
   RCCHECK(rclc_publisher_init_default(&pub_debug, &node,
                                       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16MultiArray),
                                       "system_debug"));
-  RCCHECK(rclc_publisher_init_default(
-      &pub_tank_state, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int8), "tank_state"));
 
   msg_debug.data.capacity = 4;
   msg_debug.data.size = 4;
@@ -735,7 +559,7 @@ void setup() {
   msg_tuning.data.size = 6;
   msg_tuning.data.data = tuning_buffer;
 
-  RCCHECK(rclc_executor_init(&executor, &support.context, 6, &allocator));
+  RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_setpoint, &msg_setpoint, &cb_setpoint,
                                          ON_NEW_DATA));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_mode, &msg_mode, &cb_mode, ON_NEW_DATA));
@@ -743,8 +567,6 @@ void setup() {
                                          ON_NEW_DATA));
   RCCHECK(
       rclc_executor_add_subscription(&executor, &sub_tuning, &msg_tuning, &cb_tuning, ON_NEW_DATA));
-  RCCHECK(
-      rclc_executor_add_subscription(&executor, &sub_boost, &msg_boost, &cb_boost, ON_NEW_DATA));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_hwtest, &msg_hwtest, &cb_hwtest,
                                          ON_NEW_DATA));
 

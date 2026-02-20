@@ -1,12 +1,12 @@
 """
 Ejemplo 5: Teleoperación por Teclado (Teleop)
 ---------------------------------------------
-Permite controlar los 6 movimientos del robot SoftBot en tiempo real.
+Permite controlar movimientos del robot SoftBot en tiempo real.
 Usa lectura de teclado no bloqueante (estilo videojuego).
 
 Movimientos:
-1. Inflar A      2. Inflar B      3. Inflar Ambas
-4. Succionar A   5. Succionar B   6. Succionar Ambas
+1. Inflar A/B/C/AB/ABC
+2. Succionar A/B/C/AB/ABC
 
 Autor: Diego Gerardo Sanchez Moreno
 """
@@ -28,20 +28,19 @@ from sdk.softbot_interface import SoftBot
 TARGET_PRESSURE_POS = 15.0  # kPa inicial para inflado
 TARGET_PRESSURE_NEG = -15.0  # kPa inicial para succión
 STEP_SIZE = 1.0  # Incremento de presión por tecla
-BOOST_PULSE_S = 0.15  # Duración del pulso boost
 
 msg = """
 🤖 CONTROL MANUAL SOFTBOT v1.0
 ---------------------------
 Moverse:
-   Q : Inflar A      W : Inflar B      E : Inflar AMBAS
-   A : Succionar A   S : Succionar B   D : Succionar AMBAS
+   Q : Inflar A      W : Inflar B      E : Inflar A+B
+   R : Inflar C      T : Inflar A+B+C
+   A : Succionar A   S : Succionar B   D : Succionar A+B
+   F : Succionar C   G : Succionar A+B+C
 
 Funciones:
    ESPACIO : PARADA DE EMERGENCIA (STOP)
    + / -   : Aumentar/Disminuir Presión Objetivo
-   B       : BOOST ON/OFF (válvula tanque)
-   T       : Pulso BOOST corto
 
 CTRL-C para salir
 """
@@ -78,7 +77,7 @@ if __name__ == "__main__":
         bot = SoftBot()
 
         # Reset inicial de seguridad
-        bot.set_chamber(3)
+        bot.set_chamber(7)
         bot.stop()
 
         print(msg)
@@ -88,8 +87,6 @@ if __name__ == "__main__":
         current_action = "STOP"
         current_chamber_name = "N/A"
         current_target = 0.0
-        boost_on = False
-
         while True:
             key = getKey()
 
@@ -116,6 +113,18 @@ if __name__ == "__main__":
                 current_action = "INFLANDO"
                 current_chamber_name = "A+B"
                 current_target = TARGET_PRESSURE_POS
+            elif key == "r":
+                bot.set_chamber(4)
+                bot.inflate(TARGET_PRESSURE_POS)
+                current_action = "INFLANDO"
+                current_chamber_name = "C"
+                current_target = TARGET_PRESSURE_POS
+            elif key == "t":
+                bot.set_chamber(7)
+                bot.inflate(TARGET_PRESSURE_POS)
+                current_action = "INFLANDO"
+                current_chamber_name = "A+B+C"
+                current_target = TARGET_PRESSURE_POS
 
             # 2. MOVIMIENTOS SUCCIÓN (Fila ASD)
             elif key == "a":
@@ -137,6 +146,18 @@ if __name__ == "__main__":
                 bot.suction(TARGET_PRESSURE_NEG)
                 current_action = "SUCCIONANDO"
                 current_chamber_name = "A+B"
+                current_target = TARGET_PRESSURE_NEG
+            elif key == "f":
+                bot.set_chamber(4)
+                bot.suction(TARGET_PRESSURE_NEG)
+                current_action = "SUCCIONANDO"
+                current_chamber_name = "C"
+                current_target = TARGET_PRESSURE_NEG
+            elif key == "g":
+                bot.set_chamber(7)
+                bot.suction(TARGET_PRESSURE_NEG)
+                current_action = "SUCCIONANDO"
+                current_chamber_name = "A+B+C"
                 current_target = TARGET_PRESSURE_NEG
 
             # 3. CONTROL Y AJUSTES
@@ -165,13 +186,6 @@ if __name__ == "__main__":
 
             elif key == "\x03":  # Ctrl+C
                 break
-            elif key in ("b", "B"):
-                boost_on = not boost_on
-                bot.set_boost(boost_on)
-                print(f"\n⚡ BOOST {'ON' if boost_on else 'OFF'}")
-            elif key in ("t", "T"):
-                bot.pulse_boost(BOOST_PULSE_S)
-                print(f"\n⚡ PULSO BOOST {BOOST_PULSE_S:.2f}s")
 
             # Actualizar feedback visual
             print_status(bot, current_action, current_chamber_name, current_target)

@@ -121,7 +121,7 @@ if [[ "$WITH_HARDWARE" == "true" ]]; then
 
   step "HW valve_inflate" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component valve_inflate --duration-s 0.8"
   step "HW valve_suction" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component valve_suction --duration-s 0.8"
-  step "HW valve_boost" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component valve_boost --duration-s 0.8"
+  step "HW valve_chamber_c" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component valve_chamber_c --duration-s 0.8"
   step "HW mux_a" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component mux_a --duration-s 0.8"
   step "HW mux_b" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component mux_b --duration-s 0.8"
   step "HW inflate_main" "cd '$REPO_ROOT' && ./scripts/labctl hardware test --component inflate_main --pwm 120 --duration-s 1.0"

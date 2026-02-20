@@ -22,9 +22,11 @@ PROFILES_DIR = REPO_ROOT / "config" / "profiles"
 EXAMPLES_DIR = REPO_ROOT / "software" / "ejemplos"
 GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "softbot_gui.py"
 HARDWARE_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "hardware_mosfet_gui.py"
+PUMP_EVAL_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "pump_eval_gui.py"
 SMOKE_SCRIPT = REPO_ROOT / "software" / "tools" / "smoke_lab.py"
 HARDWARE_TEST_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_component_tester.py"
 HARDWARE_RUNTIME_CHECK_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_runtime_check.py"
+PUMP_SWAP_BENCH_SCRIPT = REPO_ROOT / "software" / "tools" / "pump_swap_validation.py"
 
 OPS_DIR = REPO_ROOT / "experiments" / "logs" / "ops"
 STATE_FILE = OPS_DIR / "labctl_state.json"
@@ -483,6 +485,25 @@ def cmd_gui_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui_pump_eval(args: argparse.Namespace) -> int:
+    if not PUMP_EVAL_GUI_SCRIPT.exists():
+        raise LabCtlError(f"Pump eval GUI script missing: {PUMP_EVAL_GUI_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(PUMP_EVAL_GUI_SCRIPT)]
+    if args.foreground:
+        event("gui pump-eval foreground")
+        run_command(ros_wrapped(command))
+        return 0
+
+    start_background(name="gui_pump_eval", parts=command, use_ros=True)
+    print(
+        "Pump eval GUI started in background. If no window appears, "
+        "run: ./scripts/labctl gui pump-eval --foreground"
+    )
+    return 0
+
+
 def cmd_example_run(args: argparse.Namespace) -> int:
     example = resolve_example(args.name)
     python_bin = resolve_repo_python()
@@ -612,6 +633,49 @@ def cmd_hardware_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_benchmark_pumps(args: argparse.Namespace) -> int:
+    if not PUMP_SWAP_BENCH_SCRIPT.exists():
+        raise LabCtlError(f"Pump benchmark script missing: {PUMP_SWAP_BENCH_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [
+        python_bin,
+        str(PUMP_SWAP_BENCH_SCRIPT),
+        "--pump-label",
+        str(args.pump_label),
+        "--mode",
+        str(args.mode),
+        "--target-kpa",
+        str(args.target_kpa),
+        "--chamber",
+        str(args.chamber),
+        "--runs",
+        str(args.runs),
+        "--timeout-s",
+        str(args.timeout_s),
+        "--sample-ms",
+        str(args.sample_ms),
+        "--vent-s",
+        str(args.vent_s),
+        "--rest-s",
+        str(args.rest_s),
+        "--registry-csv",
+        str(args.registry_csv),
+    ]
+    if args.tag:
+        command.extend(["--tag", str(args.tag)])
+    if args.no_registry:
+        command.append("--no-registry")
+
+    event(
+        "benchmark pumps "
+        f"label={args.pump_label} mode={args.mode} chamber={args.chamber} "
+        f"target={args.target_kpa} runs={args.runs}"
+    )
+    run_command(ros_wrapped(command))
+    return 0
+
+
 def terminate_process(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -685,11 +749,18 @@ def build_parser() -> argparse.ArgumentParser:
     gui_start.add_argument("--foreground", action="store_true", help="Run attached to terminal")
     gui_start.set_defaults(func=cmd_gui_start)
 
+    gui_pump_eval = gui_sub.add_parser(
+        "pump-eval",
+        help="Start dedicated pump evaluation GUI",
+    )
+    gui_pump_eval.add_argument("--foreground", action="store_true", help="Run attached to terminal")
+    gui_pump_eval.set_defaults(func=cmd_gui_pump_eval)
+
     example = sub.add_parser("example", help="Run example scripts")
     example_sub = example.add_subparsers(dest="example_cmd", required=True)
 
     example_run = example_sub.add_parser("run", help="Run example script by name or path")
-    example_run.add_argument("name", help="Example filename (e.g. 09_tank_fill)")
+    example_run.add_argument("name", help="Example filename (e.g. 01_Locomocion_Gusano)")
     example_run.add_argument(
         "--foreground",
         action="store_true",
@@ -699,10 +770,50 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke = sub.add_parser("smoke", help="Execute safe smoke test sequence")
     smoke.add_argument("--profile", default="default")
-    smoke.add_argument("--chamber", type=int, default=3, choices=[1, 2, 3])
+    smoke.add_argument("--chamber", type=int, default=7, choices=[1, 2, 3, 4, 5, 6, 7])
     smoke.add_argument("--inflate-kpa", type=float, default=5.0)
     smoke.add_argument("--hold-s", type=float, default=1.0)
     smoke.set_defaults(func=cmd_smoke)
+
+    benchmark = sub.add_parser("benchmark", help="Benchmark routines for competition testing")
+    benchmark_sub = benchmark.add_subparsers(dest="benchmark_cmd", required=True)
+
+    bench_pumps = benchmark_sub.add_parser(
+        "pumps",
+        help="Benchmark pump setup speed (time to target pressure)",
+    )
+    bench_pumps.add_argument(
+        "--pump-label",
+        required=True,
+        type=str,
+        help="Pump setup label (examples: actuales, nuevas_v1)",
+    )
+    bench_pumps.add_argument(
+        "--mode",
+        type=str,
+        choices=["pid"],
+        default="pid",
+        help="Control mode for the benchmark run",
+    )
+    bench_pumps.add_argument("--target-kpa", type=float, default=35.0)
+    bench_pumps.add_argument("--chamber", type=int, default=7, choices=[1, 2, 3, 4, 5, 6, 7])
+    bench_pumps.add_argument("--runs", type=int, default=5)
+    bench_pumps.add_argument("--timeout-s", type=float, default=3.0)
+    bench_pumps.add_argument("--sample-ms", type=int, default=20)
+    bench_pumps.add_argument("--vent-s", type=float, default=0.6)
+    bench_pumps.add_argument("--rest-s", type=float, default=0.4)
+    bench_pumps.add_argument("--tag", type=str, default="")
+    bench_pumps.add_argument(
+        "--registry-csv",
+        type=str,
+        default="experiments/pump_benchmark_registry.csv",
+    )
+    bench_pumps.add_argument(
+        "--no-registry",
+        action="store_true",
+        help="Skip writing benchmark result into cumulative registry CSV",
+    )
+    bench_pumps.set_defaults(func=cmd_benchmark_pumps)
 
     hardware = sub.add_parser("hardware", help="Hardware component diagnostics")
     hardware_sub = hardware.add_subparsers(dest="hardware_cmd", required=True)
@@ -718,7 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
             "suction_aux",
             "valve_inflate",
             "valve_suction",
-            "valve_boost",
+            "valve_chamber_c",
             "mux_a",
             "mux_b",
         ],

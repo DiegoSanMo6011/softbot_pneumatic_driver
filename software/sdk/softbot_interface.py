@@ -2,8 +2,8 @@
 """
 SoftBot Python Interface (SDK).
 
-Wrapper para SoftBot Pneumatic Driver con control de locomocion, tuning y
-operaciones con turbo pre-PID.
+Wrapper para SoftBot Pneumatic Driver con control de locomocion,
+tuning y diagnostico de hardware.
 """
 
 from __future__ import annotations
@@ -18,32 +18,26 @@ from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16, Int16MultiArra
 
 try:
     from .protocol import (
-        CHAMBER_AB,
-        CHAMBER_BLOCKED,
+        CHAMBER_ABC,
         MODE_HARDWARE_DIAGNOSTIC,
         MODE_PID_INFLATE,
-        MODE_PID_INFLATE_TURBO,
         MODE_PID_SUCTION,
         MODE_PWM_INFLATE,
         MODE_PWM_SUCTION,
         MODE_STOP,
-        MODE_TANK_FILL,
         MODE_VENT,
         VALID_CHAMBERS,
         build_hardware_mask,
     )
 except ImportError:
     from protocol import (  # type: ignore
-        CHAMBER_AB,
-        CHAMBER_BLOCKED,
+        CHAMBER_ABC,
         MODE_HARDWARE_DIAGNOSTIC,
         MODE_PID_INFLATE,
-        MODE_PID_INFLATE_TURBO,
         MODE_PID_SUCTION,
         MODE_PWM_INFLATE,
         MODE_PWM_SUCTION,
         MODE_STOP,
-        MODE_TANK_FILL,
         MODE_VENT,
         VALID_CHAMBERS,
         build_hardware_mask,
@@ -59,9 +53,7 @@ class SoftBot(Node):
         self.TOPIC_MODE = "/pressure_mode"
         self.TOPIC_SETPOINT = "/pressure_setpoint"
         self.TOPIC_TUNING = "/tuning_params"
-        self.TOPIC_BOOST = "/boost_valve"
         self.TOPIC_HARDWARE_TEST = "/hardware_test"
-        self.TOPIC_TANK_STATE = "/tank_state"
         self.TOPIC_FEEDBACK = "/pressure_feedback"
         self.TOPIC_DEBUG = "/system_debug"
 
@@ -70,7 +62,6 @@ class SoftBot(Node):
         self.pub_mode = self.create_publisher(Int8, self.TOPIC_MODE, 10)
         self.pub_setpoint = self.create_publisher(Float32, self.TOPIC_SETPOINT, 10)
         self.pub_tuning = self.create_publisher(Float32MultiArray, self.TOPIC_TUNING, 10)
-        self.pub_boost = self.create_publisher(Int8, self.TOPIC_BOOST, 10)
         self.pub_hwtest = self.create_publisher(Int16, self.TOPIC_HARDWARE_TEST, 10)
 
         # Subscribers
@@ -86,17 +77,10 @@ class SoftBot(Node):
             self._cb_debug,
             10,
         )
-        self.sub_tank_state = self.create_subscription(
-            Int8,
-            self.TOPIC_TANK_STATE,
-            self._cb_tank_state,
-            10,
-        )
 
         # Telemetry state
         self.pressure_kpa = 0.0
         self.debug_vector = [0, 0, 0, 0]
-        self.tank_state = 0
         self._telemetry_lock = threading.Lock()
 
         # Matches firmware defaults (softbot_controller.ino).
@@ -129,10 +113,6 @@ class SoftBot(Node):
         with self._telemetry_lock:
             if len(msg.data) >= 4:
                 self.debug_vector = list(msg.data)
-
-    def _cb_tank_state(self, msg):
-        with self._telemetry_lock:
-            self.tank_state = int(msg.data)
 
     def _publish_with_retries(
         self,
@@ -185,10 +165,6 @@ class SoftBot(Node):
         """Activate PID inflation with kPa setpoint."""
         self._send_mode_setpoint_reliable(MODE_PID_INFLATE, float(pressure_kpa))
 
-    def inflate_turbo(self, pressure_kpa: float):
-        """Activate turbo pre-PID inflation (mode 5)."""
-        self._send_mode_setpoint_reliable(MODE_PID_INFLATE_TURBO, float(pressure_kpa))
-
     def suction(self, pressure_kpa):
         """Activate PID suction with a negative kPa setpoint."""
         self._send_mode_setpoint_reliable(MODE_PID_SUCTION, float(pressure_kpa))
@@ -196,10 +172,9 @@ class SoftBot(Node):
     def stop(self):
         """Stop pumps and valves."""
         self._send_mode_setpoint_reliable(MODE_STOP, 0.0, repeats=2, interval_s=0.02)
-        self.set_boost(False)
 
     def set_chamber(self, chamber_id: int):
-        """Select active chamber (0=blocked, 1=A, 2=B, 3=A+B)."""
+        """Select active chamber bitmask (0=blocked, 1=A, 2=B, 4=C, OR-combinations up to 7)."""
         chamber_id = int(chamber_id)
         if chamber_id not in VALID_CHAMBERS:
             raise ValueError(f"Invalid chamber {chamber_id}. Valid values: {VALID_CHAMBERS}")
@@ -219,22 +194,6 @@ class SoftBot(Node):
             )
         self._send_mode_setpoint_reliable(mode, float(pwm_val))
 
-    def set_boost(self, enabled: bool, repeats: int = 3, interval_s: float = 0.03):
-        """Set boost valve state with retries."""
-        msg = Int8(data=1 if enabled else 0)
-        self._publish_with_retries(
-            self.pub_boost,
-            msg,
-            repeats=repeats,
-            interval_s=interval_s,
-        )
-
-    def pulse_boost(self, duration_s: float):
-        """Trigger a timed boost pulse."""
-        self.set_boost(True)
-        time.sleep(max(0.0, float(duration_s)))
-        self.set_boost(False)
-
     def set_hardware_test(
         self,
         bitmask: int,
@@ -247,7 +206,7 @@ class SoftBot(Node):
 
         bitmask bits:
           0 inflate_main, 1 inflate_aux, 2 suction_main, 3 suction_aux,
-          4 valve_inflate, 5 valve_suction, 6 valve_boost,
+          4 valve_inflate, 5 valve_suction, 6 valve_chamber_c,
           7 mux_A, 8 mux_B.
         """
         pwm = int(max(0, min(255, int(pwm))))
@@ -291,7 +250,7 @@ class SoftBot(Node):
         Apply grouped hardware diagnostics.
 
         `pressure_on` and `vacuum_on` enable pump groups.
-        `valves` accepts keys: inflate, suction, boost or full ids (valve_*).
+        `valves` accepts keys: inflate, suction, chamber_c or full ids (valve_*).
         `mux` accepts keys: a, b or full ids (mux_*).
         """
         groups: list[str] = []
@@ -303,10 +262,10 @@ class SoftBot(Node):
         valve_map = {
             "inflate": "valve_inflate",
             "suction": "valve_suction",
-            "boost": "valve_boost",
+            "chamber_c": "valve_chamber_c",
             "valve_inflate": "valve_inflate",
             "valve_suction": "valve_suction",
-            "valve_boost": "valve_boost",
+            "valve_chamber_c": "valve_chamber_c",
         }
         mux_map = {
             "a": "mux_a",
@@ -343,11 +302,7 @@ class SoftBot(Node):
         self.set_hardware_test(0, pwm=0, repeats=2, interval_s=0.02)
         self.stop()
 
-    def fill_tank(self, target_kpa: float):
-        """Start tank fill mode with a kPa setpoint."""
-        self._send_command_reliable(CHAMBER_BLOCKED, MODE_TANK_FILL, float(target_kpa))
-
-    def vent(self, chamber_id: int = CHAMBER_AB, duration_s: float | None = None):
+    def vent(self, chamber_id: int = CHAMBER_ABC, duration_s: float | None = None):
         """Release pressure to atmosphere."""
         chamber_id = int(chamber_id)
         if chamber_id not in VALID_CHAMBERS:
@@ -356,10 +311,6 @@ class SoftBot(Node):
         if duration_s is not None:
             time.sleep(max(0.0, float(duration_s)))
             self.stop()
-
-    def stop_fill(self):
-        """Stop tank fill mode."""
-        self.stop()
 
     def update_tuning(self, **kwargs):
         """
@@ -393,7 +344,6 @@ class SoftBot(Node):
                 "logic_state": self.debug_vector[3],
                 "error_raw": error_raw,
                 "error": error_raw / 10.0,
-                "tank_state": self.tank_state,
             }
 
     def close(self):

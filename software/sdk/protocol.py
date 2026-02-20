@@ -9,8 +9,21 @@ from dataclasses import dataclass
 CHAMBER_BLOCKED = 0
 CHAMBER_A = 1
 CHAMBER_B = 2
-CHAMBER_AB = 3
-VALID_CHAMBERS = (CHAMBER_BLOCKED, CHAMBER_A, CHAMBER_B, CHAMBER_AB)
+CHAMBER_C = 4
+CHAMBER_AB = CHAMBER_A | CHAMBER_B
+CHAMBER_AC = CHAMBER_A | CHAMBER_C
+CHAMBER_BC = CHAMBER_B | CHAMBER_C
+CHAMBER_ABC = CHAMBER_A | CHAMBER_B | CHAMBER_C
+VALID_CHAMBERS = (
+    CHAMBER_BLOCKED,
+    CHAMBER_A,
+    CHAMBER_B,
+    CHAMBER_C,
+    CHAMBER_AB,
+    CHAMBER_AC,
+    CHAMBER_BC,
+    CHAMBER_ABC,
+)
 
 # Pressure control modes.
 MODE_STOP = 0
@@ -18,9 +31,7 @@ MODE_PID_INFLATE = 1
 MODE_PID_SUCTION = -1
 MODE_PWM_INFLATE = 2
 MODE_PWM_SUCTION = -2
-MODE_TANK_FILL = 3
 MODE_VENT = 4
-MODE_PID_INFLATE_TURBO = 5
 MODE_HARDWARE_DIAGNOSTIC = 9
 
 # Hardware diagnostic bitmask for /hardware_test.
@@ -30,7 +41,7 @@ HW_PUMP_SUCTION_MAIN = 1 << 2
 HW_PUMP_SUCTION_AUX = 1 << 3
 HW_VALVE_INFLATE = 1 << 4
 HW_VALVE_SUCTION = 1 << 5
-HW_VALVE_BOOST = 1 << 6
+HW_VALVE_CHAMBER_C = 1 << 6
 HW_MUX_CHAMBER_A = 1 << 7
 HW_MUX_CHAMBER_B = 1 << 8
 
@@ -102,8 +113,8 @@ HARDWARE_COMPONENTS = (
         ui_order=31,
     ),
     HardwareComponent(
-        id="valve_boost",
-        label="Valve Boost",
+        id="valve_chamber_c",
+        label="Valve Chamber C",
         bit=6,
         kind="valve",
         group="valve",
@@ -206,8 +217,6 @@ MODE_LABELS = {
     MODE_PID_SUCTION: "PID_SUCTION",
     MODE_PWM_INFLATE: "PWM_INFLATE",
     MODE_PWM_SUCTION: "PWM_SUCTION",
-    MODE_TANK_FILL: "TANK_FILL",
     MODE_VENT: "VENT",
-    MODE_PID_INFLATE_TURBO: "PID_INFLATE_TURBO",
     MODE_HARDWARE_DIAGNOSTIC: "HARDWARE_DIAGNOSTIC",
 }

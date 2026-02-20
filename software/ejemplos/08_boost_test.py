@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Ejemplo 8: Prueba de BOOST (tanque)
-----------------------------------
-B: toggle boost, P: pulso breve, ESPACIO: stop, Q: salir
+Ejemplo 8: Prueba de habilitación de Cámara C (pin legacy BOOST)
+----------------------------------------------------------------
+B: habilitar/deshabilitar C, P: pulso breve de C, ESPACIO: stop, Q: salir
 """
 
 import os
@@ -17,13 +17,15 @@ import rclpy
 
 from sdk.softbot_interface import SoftBot
 
-BOOST_PULSE_S = 0.15
+C_PULSE_S = 0.15
+BASE_MASK = 3  # A+B
+C_ON_MASK = 7  # A+B+C
 
 msg = """
-⚡ PRUEBA BOOST (TANQUE)
-----------------------
-B : BOOST ON/OFF
-P : Pulso BOOST corto
+⚡ PRUEBA CÁMARA C (pin legacy BOOST)
+-----------------------------------
+B : C ON/OFF
+P : Pulso C corto
 ESPACIO : STOP
 Q : Salir
 """
@@ -37,11 +39,17 @@ def getKey():
     return key
 
 
-def print_status(bot, boost_on):
+def set_c_state(bot: SoftBot, c_on: bool) -> int:
+    mask = C_ON_MASK if c_on else BASE_MASK
+    bot.set_chamber(mask)
+    return mask
+
+
+def print_status(bot: SoftBot, c_on: bool, chamber_mask: int):
     state = bot.get_state()
     sys.stdout.write(
-        f"\r\033[KBoost={'ON' if boost_on else 'OFF'} | "
-        f"P={state['pressure']:.2f} kPa | PWM={state['pwm_main']}"
+        f"\r\033[KC={'ON' if c_on else 'OFF'} | "
+        f"Mask={chamber_mask} | P={state['pressure']:.2f} kPa | PWM={state['pwm_main']}"
     )
     sys.stdout.flush()
 
@@ -52,34 +60,38 @@ if __name__ == "__main__":
 
     try:
         bot = SoftBot()
-        bot.set_chamber(3)
+        chamber_mask = BASE_MASK
+        bot.set_chamber(chamber_mask)
         bot.stop()
 
         print(msg)
-        boost_on = False
+        c_on = False
 
         while True:
             key = getKey()
             if key in ("b", "B"):
-                boost_on = not boost_on
-                bot.set_boost(boost_on)
-                print(f"\n⚡ BOOST {'ON' if boost_on else 'OFF'}")
+                c_on = not c_on
+                chamber_mask = set_c_state(bot, c_on)
+                print(f"\n⚡ C {'ON' if c_on else 'OFF'}")
             elif key in ("p", "P"):
-                bot.pulse_boost(BOOST_PULSE_S)
-                print(f"\n⚡ PULSO BOOST {BOOST_PULSE_S:.2f}s")
+                chamber_mask = set_c_state(bot, True)
+                print(f"\n⚡ PULSO C {C_PULSE_S:.2f}s")
+                time.sleep(C_PULSE_S)
+                c_on = False
+                chamber_mask = set_c_state(bot, c_on)
             elif key == " ":
                 bot.stop()
-                boost_on = False
+                c_on = False
+                chamber_mask = set_c_state(bot, c_on)
                 print("\n🛑 STOP")
             elif key in ("q", "Q", "\x03"):
                 break
 
-            print_status(bot, boost_on)
+            print_status(bot, c_on, chamber_mask)
             time.sleep(0.05)
 
     finally:
-        bot.set_boost(False)
         bot.stop()
         bot.close()
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-        print("\n👋 Fin de prueba BOOST.")
+        print("\n👋 Fin de prueba de Cámara C.")

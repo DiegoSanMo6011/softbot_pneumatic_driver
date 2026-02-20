@@ -15,7 +15,6 @@ EXPECTED_FIRMWARE_NODE = "soft_robot_node"
 EXPECTED_TELEMETRY_TOPICS = {
     "/pressure_feedback": "std_msgs/msg/Float32",
     "/system_debug": "std_msgs/msg/Int16MultiArray",
-    "/tank_state": "std_msgs/msg/Int8",
 }
 
 EXPECTED_COMMAND_TOPICS = {
@@ -23,7 +22,6 @@ EXPECTED_COMMAND_TOPICS = {
     "/pressure_setpoint": "std_msgs/msg/Float32",
     "/active_chamber": "std_msgs/msg/Int8",
     "/tuning_params": "std_msgs/msg/Float32MultiArray",
-    "/boost_valve": "std_msgs/msg/Int8",
     "/hardware_test": "std_msgs/msg/Int16",
 }
 
