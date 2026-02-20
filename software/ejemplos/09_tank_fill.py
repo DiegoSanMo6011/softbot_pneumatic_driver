@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Ejemplo 9: Llenado de tanque (modo 3)
-------------------------------------
-Inicia llenado y espera estado FULL o TIMEOUT.
+Ejemplo 9: Prueba de combinaciones de cámaras (A/B/C)
+-----------------------------------------------------
+Recorre máscaras de cámara y aplica inflado/succión breve.
 """
 
 import os
@@ -14,15 +14,21 @@ import rclpy
 
 from sdk.softbot_interface import SoftBot
 
-TARGET_KPA = 35.0
-TIMEOUT_S = 15.0
+SEQUENCE_MASKS = [1, 2, 4, 3, 5, 6, 7]
+INFLATE_KPA = 12.0
+SUCTION_KPA = -8.0
+HOLD_S = 0.8
 
-STATE_MAP = {
-    0: "IDLE",
-    1: "LLENANDO",
-    2: "LLENO",
-    3: "TIMEOUT",
-}
+
+def mask_label(mask: int) -> str:
+    parts = []
+    if mask & 1:
+        parts.append("A")
+    if mask & 2:
+        parts.append("B")
+    if mask & 4:
+        parts.append("C")
+    return "+".join(parts) if parts else "BLOCKED"
 
 
 def main():
@@ -30,27 +36,25 @@ def main():
     bot = SoftBot()
 
     try:
-        bot.set_chamber(0)
         bot.stop()
-        print(f"\n🚰 Llenado de tanque: objetivo {TARGET_KPA} kPa")
-        bot.fill_tank(TARGET_KPA)
+        print("\n🧪 Prueba de máscaras de cámara")
+        for mask in SEQUENCE_MASKS:
+            label = mask_label(mask)
+            print(f"\n➡️  Cámara {label} (mask={mask}) | Inflado {INFLATE_KPA} kPa")
+            bot.set_chamber(mask)
+            bot.inflate(INFLATE_KPA)
+            time.sleep(HOLD_S)
 
-        start = time.time()
-        while (time.time() - start) < TIMEOUT_S:
             state = bot.get_state()
-            tank_state = state.get("tank_state", 0)
-            print(
-                f"\rEstado tanque: {STATE_MAP.get(tank_state, 'N/A')} | "
-                f"P={state['pressure']:.2f} kPa",
-                end="",
-            )
+            print(f"   Telemetría: P={state['pressure']:.2f} kPa PWM={state['pwm_main']}")
 
-            if tank_state in (2, 3):
-                break
-            time.sleep(0.05)
+            print(f"⬅️  Cámara {label} (mask={mask}) | Succión {SUCTION_KPA} kPa")
+            bot.suction(SUCTION_KPA)
+            time.sleep(HOLD_S)
+            bot.stop()
+            time.sleep(0.25)
 
-        print("\n✅ Finalizado.")
-
+        print("\n✅ Secuencia completada.")
     finally:
         bot.stop()
         bot.close()

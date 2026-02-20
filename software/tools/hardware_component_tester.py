@@ -20,7 +20,7 @@ from sdk.protocol import (
     HW_PUMP_INFLATE_MAIN,
     HW_PUMP_SUCTION_AUX,
     HW_PUMP_SUCTION_MAIN,
-    HW_VALVE_BOOST,
+    HW_VALVE_CHAMBER_C,
     HW_VALVE_INFLATE,
     HW_VALVE_SUCTION,
 )
@@ -33,7 +33,7 @@ COMPONENT_BITS = {
     "suction_aux": HW_PUMP_SUCTION_AUX,
     "valve_inflate": HW_VALVE_INFLATE,
     "valve_suction": HW_VALVE_SUCTION,
-    "valve_boost": HW_VALVE_BOOST,
+    "valve_chamber_c": HW_VALVE_CHAMBER_C,
     "mux_a": HW_MUX_CHAMBER_A,
     "mux_b": HW_MUX_CHAMBER_B,
 }
@@ -89,7 +89,7 @@ Commands:
   quit
 Components:
   inflate_main, inflate_aux, suction_main, suction_aux,
-  valve_inflate, valve_suction, valve_boost, mux_a, mux_b, all
+  valve_inflate, valve_suction, valve_chamber_c, mux_a, mux_b, all
 """.strip()
 
     print(help_text)

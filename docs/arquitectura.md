@@ -9,26 +9,40 @@ El sistema está dividido en dos capas:
 - MCU: **ESP32**
 - Sensor: **ADS1115** (I2C, 16-bit) con sensor de presión analógico
 - Actuadores: bombas de inflado y succión + válvulas direccionales
-- Mux neumático: selección de cámara A/B o ambas
+- Selección neumática:
+  - `MUX A` (pin dedicado)
+  - `MUX B` (pin dedicado)
+  - `Válvula Cámara C` (pin legacy BOOST)
 
-## 3. Topología neumática (resumen)
-- Inflado: bomba principal + bomba auxiliar (modo turbo)
-- Succión: bomba principal + bomba auxiliar
-- Válvulas: inflado/succión + selección de cámara
+## 3. Selección de cámara por bitmask
+El tópico `/active_chamber` usa `std_msgs/Int8` con máscara de 3 bits:
 
-> El diagrama detallado se documenta en `docs/neumatica.md`.
+- bit 0 (`1`): cámara A
+- bit 1 (`2`): cámara B
+- bit 2 (`4`): cámara C
+
+Combinaciones válidas:
+- `0`: bloqueado
+- `1`: A
+- `2`: B
+- `3`: A+B
+- `4`: C
+- `5`: A+C
+- `6`: B+C
+- `7`: A+B+C
+
+Regla especial en modo `VENT`:
+- Si llega `active_chamber=0`, el firmware ventea `A+B+C` (`mask=7`).
 
 ## 4. Tópicos ROS 2
 | Tópico | Tipo | Descripción |
 | --- | --- | --- |
-| `/active_chamber` | `std_msgs/Int8` | 0: bloqueado, 1: A, 2: B, 3: A+B |
-| `/pressure_mode` | `std_msgs/Int8` | 1: PID inflado, -1: PID succión, 2: PWM inflado, -2: PWM succión, **3: llenado de tanque**, **4: venteo**, **5: turbo pre-PID inflado**, **9: diagnóstico de hardware** |
+| `/active_chamber` | `std_msgs/Int8` | Bitmask 0..7 (A/B/C y combinaciones) |
+| `/pressure_mode` | `std_msgs/Int8` | 1: PID inflado, -1: PID succión, 2: PWM inflado, -2: PWM succión, 4: venteo, 9: diagnóstico de hardware |
 | `/pressure_setpoint` | `std_msgs/Float32` | Setpoint (kPa o PWM según modo) |
 | `/pressure_feedback` | `std_msgs/Float32` | Presión medida en kPa |
 | `/system_debug` | `std_msgs/Int16MultiArray` | [PWM_main, PWM_aux, error*10, mode] |
 | `/tuning_params` | `std_msgs/Float32MultiArray` | [Kp_pos, Ki_pos, Kp_neg, Ki_neg, max_safe, min_safe] |
-| `/boost_valve` | `std_msgs/Int8` | 0: cerrada, 1: abierta (turbo/tanque) |
-| `/tank_state` | `std_msgs/Int8` | 0: idle, 1: llenando, 2: lleno, 3: timeout |
 | `/hardware_test` | `std_msgs/Int16` | Bitmask de salidas para modo 9 (bombas/válvulas/mux) |
 
 ### 4.1 Bitmask de `/hardware_test` (modo 9)
@@ -38,7 +52,7 @@ El sistema está dividido en dos capas:
 - bit 3: bomba succión aux
 - bit 4: válvula inflado
 - bit 5: válvula succión
-- bit 6: válvula boost
+- bit 6: válvula cámara C (pin legacy BOOST)
 - bit 7: mux cámara A
 - bit 8: mux cámara B
 

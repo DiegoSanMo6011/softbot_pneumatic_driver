@@ -1,46 +1,36 @@
 # Neumática — Esquema y Conexiones
 
-## 1. Descripción actual (segun la ultima confirmacion)
+## 1. Descripción actual
 Sistema bidireccional con **4 bombas**:
 
-- **Presion**: 2 bombas en paralelo.
-- **Vacio**: 2 bombas en paralelo.
-- Ambas lineas entran al **HEADER / manifold**.
-- **Derivaciones del header**:
-  - **BOOST**: tanque con dos lineas (carga y descarga) con check valves.
-  - **SENSOR**: transductor de presion.
-  - **TEE_AT** y **TEE_AD**: valvulas 3/2 NC para inflar/ventear camara trasera (AT) y delantera (AD).
-  - **R -> atmosfera** (desfogue).
+- **Presión**: 2 bombas en paralelo.
+- **Vacío**: 2 bombas en paralelo.
+- Ambas líneas llegan al **header/manifold** principal.
 
-## 2. Notas confirmadas
-- Todas las valvulas son **NC por defecto**.
-- Se usan las mismas **3/2**; cuando se requiere 2/2 se coloca **tapon** para anular un puerto.
-- **Check valves**: por ahora **solo en el tanque**.
-- Tanques disponibles:
-  - **Plastico**: 2 entradas + 2 salidas, sin etiqueta.
-  - **Metal**: 2 puertos (carga/descarga), marcado **1.25 MPa** (se usara este).
+Desde el header se enrutan tres caminos de cámara:
+- Cámara A (vía `MUX A`)
+- Cámara B (vía `MUX B`)
+- Cámara C (vía válvula en pin legacy BOOST)
 
-## 3. Tanque (detalle confirmado)
-El tanque tiene **dos puertos**:
-- **Carga**: permite flujo del sistema hacia el tanque.
-- **Descarga**: permite flujo del tanque hacia el sistema.
-Cada puerto tiene **check valve** orientada segun el sentido de flujo.
+## 2. Selección de cámaras (lógica)
+La selección se controla por software con `/active_chamber` (bitmask):
+- `1` => A
+- `2` => B
+- `4` => C
+- combinaciones por OR (`3`, `5`, `6`, `7`)
 
-## 4. Terminologia
-**Manifold / header / interseccion** = el bloque o union donde confluyen las lineas y desde el cual salen las derivaciones a sensor, boost y camaras.
+Estado `0` bloquea cámaras, excepto en `VENT`, donde el firmware aplica venteo a `A+B+C`.
 
-## 5. Diagrama actualizado
-Ver el esquema en:
+## 3. Notas de implementación
+- No se cambiaron conexiones eléctricas.
+- El pin antes etiquetado como BOOST ahora habilita la **ruta neumática de Cámara C**.
+- El sistema ya no depende de tanque ni de modos turbo/tank-fill.
+
+## 4. Diagrama
+Ver esquema base en:
 ```
 hardware/pneumatica/diagrama.md
 ```
 
-## 6. Detalles pendientes para cerrar el diagrama
-Por favor confirmar:
-1. **Posicion de reposo exacta** en las 3/2: **A -> R abierto** y **P cerrado**.
-2. **Tanque metal**: volumen aprox **0.3 L**.
-3. **Sensor**: conectado **directo** al manifold.
-4. **Check valves**: solo en el tanque (carga/descarga).
-
-## 7. Estado final
-Con esta informacion el diagrama queda completo y consistente con la topologia actual.
+> Nota: si el diagrama histórico aún menciona tanque/boost, tomar `docs/arquitectura.md`
+> y este documento como referencia operativa vigente.

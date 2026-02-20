@@ -8,8 +8,11 @@ software/gui/softbot_gui.py
 
 Incluye:
 - Telemetría en tiempo real.
-- Modos de control PID/PWM/turbo/tanque/venteo.
+- Modos de control PID/PWM/venteo.
+- Selector de cámaras A/B/C por bitmask (`/active_chamber`).
 - Panel de hardware test por componente.
+- Panel `Benchmark bombas (competencia)` para lanzar pruebas de tiempo a target
+  (CSV en `experiments/` y registro acumulado en `experiments/pump_benchmark_registry.csv`).
 
 ## 2) GUI dedicada de diagnóstico MOSFET
 Script:
@@ -18,7 +21,7 @@ software/gui/hardware_mosfet_gui.py
 ```
 
 Incluye:
-- Válvulas independientes (`inflate`, `suction`, `boost`).
+- Válvulas independientes (`inflate`, `suction`, `chamber_c`).
 - Bombas agrupadas por `presión` y `vacío`.
 - MUX independientes (`mux_a`, `mux_b`).
 - Indicadores tipo LED ON/OFF por actuador.
@@ -26,8 +29,24 @@ Incluye:
 - Logging CSV automático en `experiments/logs/hardware_diag/`.
 - Escenario guiado `Pre-Competition MOSFET Check v1` con marcado PASS/FAIL.
 
+## 3) GUI dedicada de selección de bomba (presión + vacío)
+Script:
+```text
+software/gui/pump_eval_gui.py
+```
+
+Incluye:
+- Protocolo dual por corrida: capacidad y tiempo a target en presión y vacío.
+- Cámara fija de evaluación `ABC` (`active_chamber=7`).
+- Curva en vivo de `kPa` cruda y filtrada (mediana deslizante configurable).
+- Métricas en vivo: topes, tiempos de tope, tiempos a target.
+- Criterio `APTA/NO_APTA` (debe cumplir ambos targets en todas las corridas).
+- Score balanceado con penalización por variabilidad entre corridas.
+- Histórico por etiqueta (`pump_label`) en `experiments/pump_eval_registry.csv`.
+- Exportación de CSV raw/summary por sesión.
+
 ## Dependencias
-- `pyqtgraph` (solo para `softbot_gui.py`)
+- `pyqtgraph` (para `softbot_gui.py` y `pump_eval_gui.py`)
 - `PySide6` (o `PyQt5` como fallback)
 
 ## Ejecución
@@ -36,10 +55,13 @@ source /opt/ros/humble/setup.bash
 python3 -m pip install pyqtgraph PySide6
 python3 software/gui/softbot_gui.py
 python3 software/gui/hardware_mosfet_gui.py
+python3 software/gui/pump_eval_gui.py
 ```
 
 También disponible por CLI:
 ```bash
-./scripts/labctl gui start
+./scripts/labctl gui start --foreground
+./scripts/labctl gui pump-eval --foreground
 ./scripts/labctl hardware gui --foreground
+./scripts/labctl benchmark pumps --pump-label actuales --chamber 7 --target-kpa 35 --runs 5
 ```

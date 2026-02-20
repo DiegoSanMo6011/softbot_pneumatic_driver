@@ -25,7 +25,7 @@ SOFTWARE_ROOT = os.path.join(REPO_ROOT, "software")
 if SOFTWARE_ROOT not in os.sys.path:
     os.sys.path.append(SOFTWARE_ROOT)
 
-from sdk.protocol import CHAMBER_AB  # noqa: E402
+from sdk.protocol import CHAMBER_ABC  # noqa: E402
 from sdk.softbot_interface import SoftBot  # noqa: E402
 
 
@@ -67,9 +67,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chamber",
         type=int,
-        default=CHAMBER_AB,
-        choices=[1, 2, 3],
-        help="Active chamber for the test (1=A, 2=B, 3=A+B).",
+        default=CHAMBER_ABC,
+        choices=[1, 2, 3, 4, 5, 6, 7],
+        help="Active chamber mask for the test (1=A, 2=B, 4=C, 7=A+B+C).",
     )
     parser.add_argument(
         "--runs",
@@ -145,8 +145,6 @@ def collect_run(
 
     if mode == "pid":
         bot.inflate(target_kpa)
-    elif mode == "turbo_pid":
-        bot.inflate_turbo(target_kpa)
     else:
         raise ValueError(f"Unsupported mode: {mode}")
 
@@ -290,7 +288,7 @@ def write_outputs(
                 "overshoot_std_kpa",
             ]
         )
-        for mode in ("pid", "turbo_pid"):
+        for mode in ("pid",):
             metrics = [m for m in all_metrics if m.mode == mode]
             rise_vals = [m.rise_t10_90_s for m in metrics if m.rise_t10_90_s is not None]
             target_vals = [m.time_to_target_s for m in metrics if m.time_to_target_s is not None]
@@ -325,7 +323,7 @@ def print_summary(metrics: list[RunMetrics]) -> None:
         )
 
     print("\n=== Promedios ===")
-    for mode in ("pid", "turbo_pid"):
+    for mode in ("pid",):
         by_mode = [m for m in metrics if m.mode == mode]
         rise_vals = [m.rise_t10_90_s for m in by_mode if m.rise_t10_90_s is not None]
         target_vals = [m.time_to_target_s for m in by_mode if m.time_to_target_s is not None]
@@ -367,7 +365,7 @@ def main() -> None:
         )
         sample_period_s = max(0.001, args.sample_ms / 1000.0)
 
-        modes = ("pid", "turbo_pid")
+        modes = ("pid",)
         for mode in modes:
             print(f"\n>> Ejecutando modo: {mode}")
             for run_idx in range(1, args.runs + 1):

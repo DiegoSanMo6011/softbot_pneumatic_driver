@@ -31,8 +31,11 @@ log "CLI command surface"
 ./scripts/labctl firmware --help >/dev/null
 ./scripts/labctl agent --help >/dev/null
 ./scripts/labctl gui --help >/dev/null
+./scripts/labctl gui pump-eval --help >/dev/null
 ./scripts/labctl example run --help >/dev/null
 ./scripts/labctl smoke --help >/dev/null
+./scripts/labctl benchmark --help >/dev/null
+./scripts/labctl benchmark pumps --help >/dev/null
 ./scripts/labctl hardware --help >/dev/null
 ./scripts/labctl hardware test --help >/dev/null
 ./scripts/labctl hardware gui --help >/dev/null

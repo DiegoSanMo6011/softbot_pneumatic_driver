@@ -36,5 +36,7 @@ source /opt/ros/humble/setup.bash
 ## Notas clave
 - Flashea firmware antes de levantar el agent.
 - Si el agent está activo, el puerto serial queda ocupado.
+- `/active_chamber` usa bitmask 0..7 (`A=1`, `B=2`, `C=4`).
+- El pin legacy BOOST ahora habilita la ruta neumática de Cámara C.
 - Cierre seguro obligatorio: `hardware off` y `labctl stop`.
 - Documentación histórica: `docs/archive/`.

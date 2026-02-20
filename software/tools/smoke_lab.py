@@ -26,7 +26,7 @@ def load_profile(profile_path: Path) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SoftBot lab smoke test")
     parser.add_argument("--profile", type=Path, required=True)
-    parser.add_argument("--chamber", type=int, default=3, choices=[1, 2, 3])
+    parser.add_argument("--chamber", type=int, default=7, choices=[1, 2, 3, 4, 5, 6, 7])
     parser.add_argument("--inflate-kpa", type=float, default=5.0)
     parser.add_argument("--hold-s", type=float, default=1.0)
     return parser.parse_args()

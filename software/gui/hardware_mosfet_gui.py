@@ -43,7 +43,7 @@ CARD_COMPONENT_ORDER = (
     "suction_aux",
     "valve_inflate",
     "valve_suction",
-    "valve_boost",
+    "valve_chamber_c",
     "mux_a",
     "mux_b",
 )
@@ -55,7 +55,7 @@ COMPONENT_LABELS = {
     "suction_aux": "Pump Suction Aux",
     "valve_inflate": "Valve Inflate",
     "valve_suction": "Valve Suction",
-    "valve_boost": "Valve Boost",
+    "valve_chamber_c": "Valve Chamber C",
     "mux_a": "Mux Chamber A",
     "mux_b": "Mux Chamber B",
 }
@@ -102,10 +102,10 @@ SCENARIO_STEPS = (
         components=("valve_suction",),
     ),
     ScenarioStep(
-        step_id="valve_boost",
+        step_id="valve_chamber_c",
         label="Válvula Boost",
-        instruction="Verifica LED MOSFET y actuación de la válvula boost.",
-        components=("valve_boost",),
+        instruction="Verifica LED MOSFET y actuación de la válvula de Cámara C.",
+        components=("valve_chamber_c",),
     ),
     ScenarioStep(
         step_id="mux_a",
@@ -241,7 +241,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
                 "vacuum_group",
                 "valve_inflate",
                 "valve_suction",
-                "valve_boost",
+                "valve_chamber_c",
                 "mux_a",
                 "mux_b",
                 "scenario_step",
@@ -277,7 +277,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
         self.cb_vacuum_group = QtWidgets.QCheckBox("Bombas de Vacío (juntas)")
         self.cb_valve_inflate = QtWidgets.QCheckBox("Valve Inflate")
         self.cb_valve_suction = QtWidgets.QCheckBox("Valve Suction")
-        self.cb_valve_boost = QtWidgets.QCheckBox("Valve Boost")
+        self.cb_valve_chamber_c = QtWidgets.QCheckBox("Valve Chamber C")
         self.cb_mux_a = QtWidgets.QCheckBox("Mux A")
         self.cb_mux_b = QtWidgets.QCheckBox("Mux B")
 
@@ -300,7 +300,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
         grid.addWidget(self.cb_vacuum_group, 1, 0, 1, 2)
         grid.addWidget(self.cb_valve_inflate, 2, 0)
         grid.addWidget(self.cb_valve_suction, 2, 1)
-        grid.addWidget(self.cb_valve_boost, 3, 0)
+        grid.addWidget(self.cb_valve_chamber_c, 3, 0)
         grid.addWidget(self.cb_mux_a, 3, 1)
         grid.addWidget(self.cb_mux_b, 4, 0)
         grid.addWidget(QtWidgets.QLabel("PWM bombas"), 4, 1)
@@ -371,7 +371,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
             self.cb_vacuum_group,
             self.cb_valve_inflate,
             self.cb_valve_suction,
-            self.cb_valve_boost,
+            self.cb_valve_chamber_c,
             self.cb_mux_a,
             self.cb_mux_b,
         ]
@@ -388,7 +388,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
             "vacuum": self.cb_vacuum_group.isChecked(),
             "valve_inflate": self.cb_valve_inflate.isChecked(),
             "valve_suction": self.cb_valve_suction.isChecked(),
-            "valve_boost": self.cb_valve_boost.isChecked(),
+            "valve_chamber_c": self.cb_valve_chamber_c.isChecked(),
             "mux_a": self.cb_mux_a.isChecked(),
             "mux_b": self.cb_mux_b.isChecked(),
         }
@@ -403,7 +403,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
             self.cb_vacuum_group,
             self.cb_valve_inflate,
             self.cb_valve_suction,
-            self.cb_valve_boost,
+            self.cb_valve_chamber_c,
             self.cb_mux_a,
             self.cb_mux_b,
         ]
@@ -414,7 +414,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
         self.cb_vacuum_group.setChecked(vacuum_on)
         self.cb_valve_inflate.setChecked("valve_inflate" in active)
         self.cb_valve_suction.setChecked("valve_suction" in active)
-        self.cb_valve_boost.setChecked("valve_boost" in active)
+        self.cb_valve_chamber_c.setChecked("valve_chamber_c" in active)
         self.cb_mux_a.setChecked("mux_a" in active)
         self.cb_mux_b.setChecked("mux_b" in active)
 
@@ -486,7 +486,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
                 int(VACUUM_COMPONENTS.issubset(active)),
                 int("valve_inflate" in active),
                 int("valve_suction" in active),
-                int("valve_boost" in active),
+                int("valve_chamber_c" in active),
                 int("mux_a" in active),
                 int("mux_b" in active),
                 scenario_step,
@@ -563,7 +563,7 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
             valves={
                 "inflate": state["valve_inflate"],
                 "suction": state["valve_suction"],
-                "boost": state["valve_boost"],
+                "chamber_c": state["valve_chamber_c"],
             },
             mux={
                 "a": state["mux_a"],
