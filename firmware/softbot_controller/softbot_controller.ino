@@ -50,7 +50,7 @@ const int PWM_FREQ = 1000;
 const int PWM_RES = 8;
 const int PWM_MAX = 255;
 const int PI_PWM_MAX_INFLATE = 255;
-const int PI_PWM_MAX_SUCTION = 220;
+const int PI_PWM_MAX_SUCTION = 140;
 
 // Modos de control
 const int8_t MODE_STOP = 0;
@@ -103,8 +103,8 @@ const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
 };
 
 const int THRESHOLD_AUX_ENABLE = 40;
-const float SUCTION_RELEASE_ON_ERROR_KPA = 0.8f;
-const float SUCTION_RELEASE_OFF_ERROR_KPA = -1.4f;
+const float SUCTION_RELEASE_ON_ERROR_KPA = 0.2f;
+const float SUCTION_RELEASE_OFF_ERROR_KPA = -1.0f;
 
 const int PIN_I2C_SDA = 21;
 const int PIN_I2C_SCL = 22;
