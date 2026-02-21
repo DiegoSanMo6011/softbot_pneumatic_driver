@@ -18,6 +18,9 @@ Core commands:
 - `labctl example run <name>`
 - `labctl smoke`
 - `labctl benchmark pumps --pump-label <label>`
+- `labctl tuning capture-id`
+- `labctl tuning root-locus --id-csv <csv...>`
+- `labctl tuning validate --baseline-summary <csv> --candidate-summary <csv>`
 - `labctl hardware test --component <name>`
 - `labctl hardware panel`
 - `labctl hardware gui [--foreground]`

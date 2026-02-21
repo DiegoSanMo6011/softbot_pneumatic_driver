@@ -27,6 +27,9 @@ SMOKE_SCRIPT = REPO_ROOT / "software" / "tools" / "smoke_lab.py"
 HARDWARE_TEST_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_component_tester.py"
 HARDWARE_RUNTIME_CHECK_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_runtime_check.py"
 PUMP_SWAP_BENCH_SCRIPT = REPO_ROOT / "software" / "tools" / "pump_swap_validation.py"
+CONTROLLER_ID_CAPTURE_SCRIPT = REPO_ROOT / "software" / "tools" / "controller_id_capture.py"
+ROOT_LOCUS_TUNER_SCRIPT = REPO_ROOT / "software" / "tools" / "root_locus_discrete_tuner.py"
+CONTROLLER_VALIDATION_SCRIPT = REPO_ROOT / "software" / "tools" / "controller_validation_report.py"
 
 OPS_DIR = REPO_ROOT / "experiments" / "logs" / "ops"
 STATE_FILE = OPS_DIR / "labctl_state.json"
@@ -256,6 +259,36 @@ def resolve_repo_python() -> str:
     if detected:
         return detected
     return sys.executable
+
+
+def python_has_modules(python_bin: str, modules: list[str]) -> bool:
+    if not modules:
+        return True
+    script = "import " + ", ".join(modules)
+    result = subprocess.run(
+        [python_bin, "-c", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def resolve_python_with_modules(modules: list[str]) -> str:
+    candidates: list[str] = []
+    preferred = resolve_repo_python()
+    candidates.append(preferred)
+
+    sys_py = shutil.which("python3")
+    if sys_py and sys_py not in candidates:
+        candidates.append(sys_py)
+
+    for candidate in candidates:
+        if python_has_modules(candidate, modules):
+            return candidate
+
+    names = ", ".join(modules)
+    raise LabCtlError(f"Python with required modules not found ({names}).")
 
 
 def board_to_env(board: str) -> str:
@@ -676,6 +709,143 @@ def cmd_benchmark_pumps(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tuning_capture_id(args: argparse.Namespace) -> int:
+    if not CONTROLLER_ID_CAPTURE_SCRIPT.exists():
+        raise LabCtlError(f"Controller ID script missing: {CONTROLLER_ID_CAPTURE_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [
+        python_bin,
+        str(CONTROLLER_ID_CAPTURE_SCRIPT),
+        "--pump-label",
+        str(args.pump_label),
+        "--chamber",
+        str(args.chamber),
+        "--pwm-levels",
+        str(args.pwm_levels),
+        "--step-duration-s",
+        str(args.step_duration_s),
+        "--sample-ms",
+        str(args.sample_ms),
+        "--vent-s",
+        str(args.vent_s),
+        "--rest-s",
+        str(args.rest_s),
+        "--repeats",
+        str(args.repeats),
+        "--directions",
+        str(args.directions),
+    ]
+    if args.tag:
+        command.extend(["--tag", str(args.tag)])
+    if args.demo:
+        command.append("--demo")
+
+    event(
+        "tuning capture-id "
+        f"label={args.pump_label} chamber={args.chamber} repeats={args.repeats} "
+        f"directions={args.directions} demo={int(bool(args.demo))}"
+    )
+    if args.demo:
+        run_command(command)
+    else:
+        run_command(ros_wrapped(command))
+    return 0
+
+
+def cmd_tuning_root_locus(args: argparse.Namespace) -> int:
+    if not ROOT_LOCUS_TUNER_SCRIPT.exists():
+        raise LabCtlError(f"Root-locus tuner script missing: {ROOT_LOCUS_TUNER_SCRIPT}")
+
+    python_bin = resolve_python_with_modules(["numpy", "matplotlib"])
+    command = [
+        python_bin,
+        str(ROOT_LOCUS_TUNER_SCRIPT),
+        "--id-csv",
+        *[str(path) for path in args.id_csv],
+        "--sample-ms",
+        str(args.sample_ms),
+        "--target-pressure-kpa",
+        str(args.target_pressure_kpa),
+        "--target-vacuum-kpa",
+        str(args.target_vacuum_kpa),
+        "--settle-band-kpa",
+        str(args.settle_band_kpa),
+        "--settle-hold-s",
+        str(args.settle_hold_s),
+        "--max-overshoot-kpa",
+        str(args.max_overshoot_kpa),
+        "--sim-horizon-s",
+        str(args.sim_horizon_s),
+        "--z0-min",
+        str(args.z0_min),
+        "--z0-max",
+        str(args.z0_max),
+        "--z0-points",
+        str(args.z0_points),
+        "--k-min",
+        str(args.k_min),
+        "--k-max",
+        str(args.k_max),
+        "--k-points",
+        str(args.k_points),
+        "--max-pole-mag",
+        str(args.max_pole_mag),
+        "--seed",
+        str(args.seed),
+    ]
+    if args.reference_raw_csv:
+        command.extend(["--reference-raw-csv", *[str(path) for path in args.reference_raw_csv]])
+    if args.tag:
+        command.extend(["--tag", str(args.tag)])
+
+    event(
+        "tuning root-locus "
+        f"id_csv={len(args.id_csv)} refs={len(args.reference_raw_csv)} "
+        f"target_p={args.target_pressure_kpa} target_v={args.target_vacuum_kpa}"
+    )
+    run_command(command)
+    return 0
+
+
+def cmd_tuning_validate(args: argparse.Namespace) -> int:
+    if not CONTROLLER_VALIDATION_SCRIPT.exists():
+        raise LabCtlError(f"Controller validation script missing: {CONTROLLER_VALIDATION_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [
+        python_bin,
+        str(CONTROLLER_VALIDATION_SCRIPT),
+        "--baseline-summary",
+        str(args.baseline_summary),
+        "--candidate-summary",
+        str(args.candidate_summary),
+        "--settle-band-kpa",
+        str(args.settle_band_kpa),
+        "--settle-hold-s",
+        str(args.settle_hold_s),
+        "--max-time-target-s",
+        str(args.max_time_target_s),
+        "--max-overshoot-kpa",
+        str(args.max_overshoot_kpa),
+        "--max-settling-s",
+        str(args.max_settling_s),
+    ]
+    if args.baseline_raw:
+        command.extend(["--baseline-raw", str(args.baseline_raw)])
+    if args.candidate_raw:
+        command.extend(["--candidate-raw", str(args.candidate_raw)])
+    if args.tag:
+        command.extend(["--tag", str(args.tag)])
+
+    event(
+        "tuning validate "
+        f"baseline={args.baseline_summary} candidate={args.candidate_summary}"
+    )
+    run_command(command)
+    return 0
+
+
 def terminate_process(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -814,6 +984,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip writing benchmark result into cumulative registry CSV",
     )
     bench_pumps.set_defaults(func=cmd_benchmark_pumps)
+
+    tuning = sub.add_parser("tuning", help="Controller tuning pipeline commands")
+    tuning_sub = tuning.add_subparsers(dest="tuning_cmd", required=True)
+
+    tuning_capture = tuning_sub.add_parser(
+        "capture-id",
+        help="Capture open-loop PWM identification dataset",
+    )
+    tuning_capture.add_argument("--pump-label", type=str, default="ab")
+    tuning_capture.add_argument("--chamber", type=int, default=3, choices=[1, 2, 3, 4, 5, 6, 7])
+    tuning_capture.add_argument("--pwm-levels", type=str, default="80,120,160,200")
+    tuning_capture.add_argument("--step-duration-s", type=float, default=2.5)
+    tuning_capture.add_argument("--sample-ms", type=int, default=20)
+    tuning_capture.add_argument("--vent-s", type=float, default=0.6)
+    tuning_capture.add_argument("--rest-s", type=float, default=0.4)
+    tuning_capture.add_argument("--repeats", type=int, default=3)
+    tuning_capture.add_argument("--directions", type=str, default="inflate,suction")
+    tuning_capture.add_argument("--tag", type=str, default="ab")
+    tuning_capture.add_argument("--demo", action="store_true")
+    tuning_capture.set_defaults(func=cmd_tuning_capture_id)
+
+    tuning_root = tuning_sub.add_parser(
+        "root-locus",
+        help="Fit ARX models and propose PI gains via discrete root locus",
+    )
+    tuning_root.add_argument("--id-csv", nargs="+", required=True)
+    tuning_root.add_argument("--reference-raw-csv", nargs="*", default=[])
+    tuning_root.add_argument("--sample-ms", type=int, default=20)
+    tuning_root.add_argument("--target-pressure-kpa", type=float, default=28.0)
+    tuning_root.add_argument("--target-vacuum-kpa", type=float, default=-15.0)
+    tuning_root.add_argument("--settle-band-kpa", type=float, default=1.0)
+    tuning_root.add_argument("--settle-hold-s", type=float, default=0.4)
+    tuning_root.add_argument("--max-overshoot-kpa", type=float, default=2.0)
+    tuning_root.add_argument("--sim-horizon-s", type=float, default=3.0)
+    tuning_root.add_argument("--z0-min", type=float, default=0.60)
+    tuning_root.add_argument("--z0-max", type=float, default=0.98)
+    tuning_root.add_argument("--z0-points", type=int, default=40)
+    tuning_root.add_argument("--k-min", type=float, default=1e-2)
+    tuning_root.add_argument("--k-max", type=float, default=1e4)
+    tuning_root.add_argument("--k-points", type=int, default=120)
+    tuning_root.add_argument("--max-pole-mag", type=float, default=0.995)
+    tuning_root.add_argument("--seed", type=int, default=7)
+    tuning_root.add_argument("--tag", type=str, default="ab")
+    tuning_root.set_defaults(func=cmd_tuning_root_locus)
+
+    tuning_validate = tuning_sub.add_parser(
+        "validate",
+        help="Generate baseline vs candidate validation report",
+    )
+    tuning_validate.add_argument("--baseline-summary", required=True)
+    tuning_validate.add_argument("--candidate-summary", required=True)
+    tuning_validate.add_argument("--baseline-raw", type=str, default="")
+    tuning_validate.add_argument("--candidate-raw", type=str, default="")
+    tuning_validate.add_argument("--settle-band-kpa", type=float, default=1.0)
+    tuning_validate.add_argument("--settle-hold-s", type=float, default=0.4)
+    tuning_validate.add_argument("--max-time-target-s", type=float, default=0.35)
+    tuning_validate.add_argument("--max-overshoot-kpa", type=float, default=2.0)
+    tuning_validate.add_argument("--max-settling-s", type=float, default=1.0)
+    tuning_validate.add_argument("--tag", type=str, default="ab")
+    tuning_validate.set_defaults(func=cmd_tuning_validate)
 
     hardware = sub.add_parser("hardware", help="Hardware component diagnostics")
     hardware_sub = hardware.add_subparsers(dest="hardware_cmd", required=True)
