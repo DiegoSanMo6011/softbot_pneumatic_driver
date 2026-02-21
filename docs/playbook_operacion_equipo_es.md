@@ -9,6 +9,7 @@ Documento principal para operación en laboratorio, diagnóstico de hardware, ca
 - **GUI principal (`gui start`):** telemetría + control + benchmark de bombas para experimentación.
 - **GUI de hardware (`hardware gui`):** interfaz dedicada para validar conexión eléctrica/MOSFET y actuadores.
 - **GUI de evaluación de bombas (`gui pump-eval`):** caracterización dedicada de presión + vacío y ranking histórico.
+- **GUI de locomoción (`gui locomotion`):** editor/runner de secuencias con soporte A/B/C (`1..7`) y pruebas reproducibles por JSON.
 
 ## 1.1) GUIs: qué hace cada una y cómo correrla
 ### GUI principal (`gui start`)
@@ -35,6 +36,14 @@ Documento principal para operación en laboratorio, diagnóstico de hardware, ca
 ./scripts/labctl gui pump-eval --foreground
 ```
 
+### GUI de locomoción (`gui locomotion`)
+- **Qué hace:** permite diseñar, ejecutar y validar secuencias por fases (PID/PWM/vent/stop) con bitmask de 3 cámaras (`A/B/C` y combinaciones).
+- **Cuándo usarla:** iteración rápida de locomoción, validación de secuencias ya funcionales y experimentación controlada.
+- **Cómo correrla:**
+```bash
+./scripts/labctl gui locomotion --foreground
+```
+
 ## 2) Flujo oficial y propósito de cada comando
 ```bash
 cd ~/softbot_pneumatic_driver
@@ -45,6 +54,7 @@ source /opt/ros/humble/setup.bash
 ./scripts/labctl agent start --profile default --port /dev/ttyUSB0 --baud 115200
 ./scripts/labctl hardware gui --foreground
 ./scripts/labctl gui start --foreground
+./scripts/labctl gui locomotion --foreground
 ./scripts/labctl smoke --profile default
 ```
 
@@ -91,6 +101,12 @@ source /opt/ros/humble/setup.bash
 - **Dónde corre:** host Linux con entorno gráfico (`DISPLAY` activo).
 - **Para qué está pensada:** selección de bomba ideal midiendo presión y vacío sobre cámaras seleccionables A/B/C (bitmask `1..7`, default `ABC=7`).
 - **Uso típico:** comparar etiquetas de bomba (`pump_label`) y revisar ranking histórico por `score_final`.
+
+### `./scripts/labctl gui locomotion --foreground`
+- **Qué hace:** abre la GUI dedicada de secuencias de locomoción con editor de fases, presets y runner con loop configurable.
+- **Dónde corre:** host Linux con entorno gráfico (`DISPLAY` activo).
+- **Para qué está pensada:** experimentar locomoción con soporte de 3 cámaras manteniendo PID embebido en firmware.
+- **Uso típico:** cargar preset funcional, ajustar tiempos/tolerancias, correr pruebas y exportar JSON/CSV para reproducibilidad.
 
 ### `./scripts/labctl smoke --profile default`
 - **Qué hace:** ejecuta secuencia segura mínima de comandos de control.
@@ -307,8 +323,8 @@ Archivos generados por sesión:
 - `experiments/YYYY-MM/pump_eval_summary_*.csv`
 - `experiments/pump_eval_registry.csv`
 
-## 6.3) Experimentación de locomoción con `x_crabs` + GUI
-Para seguir iterando en `software/locomotion/x_crabs.py` con telemetría visual:
+## 6.3) Experimentación de locomoción con GUI dedicada
+Para iterar secuencias de locomoción con editor visual y telemetría:
 
 Terminal 1:
 ```bash
@@ -318,17 +334,14 @@ PORT=$(ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
 
 Terminal 2:
 ```bash
-./scripts/labctl gui start --foreground
+./scripts/labctl gui locomotion --foreground
 ```
 
-Terminal 3:
-```bash
-python3 software/locomotion/x_crabs.py
-```
-
-Regla operativa:
-- Si `x_crabs.py` está mandando comandos, evita enviar comandos simultáneos desde la GUI.
-- Usa la GUI principalmente para observar telemetría/log durante la ejecución de estrategias.
+Flujo recomendado:
+1. Cargar preset base (`AB settle`, `x_crabs sync AB`, `3-chamber wave`, etc.).
+2. Ajustar tiempos (`min/max`), tolerancia y `snap` por fase.
+3. Definir `loop count` (0 = infinito) y ejecutar.
+4. Exportar JSON de la secuencia validada y CSV de telemetría.
 
 ## 7) Troubleshooting esencial
 ## Docker daemon no reachable

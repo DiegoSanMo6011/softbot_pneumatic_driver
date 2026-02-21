@@ -15,6 +15,7 @@ Core commands:
 - `labctl agent start`
 - `labctl gui start`
 - `labctl gui pump-eval [--foreground]`
+- `labctl gui locomotion [--foreground]`
 - `labctl example run <name>`
 - `labctl smoke`
 - `labctl benchmark pumps --pump-label <label>`

@@ -23,6 +23,7 @@ EXAMPLES_DIR = REPO_ROOT / "software" / "ejemplos"
 GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "softbot_gui.py"
 HARDWARE_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "hardware_mosfet_gui.py"
 PUMP_EVAL_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "pump_eval_gui.py"
+LOCOMOTION_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "locomotion_gui.py"
 SMOKE_SCRIPT = REPO_ROOT / "software" / "tools" / "smoke_lab.py"
 HARDWARE_TEST_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_component_tester.py"
 HARDWARE_RUNTIME_CHECK_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_runtime_check.py"
@@ -537,6 +538,25 @@ def cmd_gui_pump_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui_locomotion(args: argparse.Namespace) -> int:
+    if not LOCOMOTION_GUI_SCRIPT.exists():
+        raise LabCtlError(f"Locomotion GUI script missing: {LOCOMOTION_GUI_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(LOCOMOTION_GUI_SCRIPT)]
+    if args.foreground:
+        event("gui locomotion foreground")
+        run_command(ros_wrapped(command))
+        return 0
+
+    start_background(name="gui_locomotion", parts=command, use_ros=True)
+    print(
+        "Locomotion GUI started in background. If no window appears, "
+        "run: ./scripts/labctl gui locomotion --foreground"
+    )
+    return 0
+
+
 def cmd_example_run(args: argparse.Namespace) -> int:
     example = resolve_example(args.name)
     python_bin = resolve_repo_python()
@@ -925,6 +945,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gui_pump_eval.add_argument("--foreground", action="store_true", help="Run attached to terminal")
     gui_pump_eval.set_defaults(func=cmd_gui_pump_eval)
+
+    gui_locomotion = gui_sub.add_parser(
+        "locomotion",
+        help="Start dedicated locomotion sequence studio GUI",
+    )
+    gui_locomotion.add_argument("--foreground", action="store_true", help="Run attached to terminal")
+    gui_locomotion.set_defaults(func=cmd_gui_locomotion)
 
     example = sub.add_parser("example", help="Run example scripts")
     example_sub = example.add_subparsers(dest="example_cmd", required=True)

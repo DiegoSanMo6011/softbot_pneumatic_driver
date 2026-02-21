@@ -33,8 +33,14 @@ software/locomotion/locomocion_ab.py
 ```
 Loop automático sincronizado (A+B) con asentamiento.
 
-## 6. Flujo recomendado para experimentar con `x_crabs`
-En 3 terminales:
+## 6. Flujo recomendado para experimentar secuencias
+Opción recomendada (GUI dedicada):
+1. `./scripts/labctl agent start --profile default --port <PORT> --baud 115200`
+2. `./scripts/labctl gui locomotion --foreground`
+3. Cargar preset base (`AB settle`, `x_crabs sync AB`, `3-chamber wave`) y ajustar fases.
+4. Ejecutar, validar y exportar JSON/CSV para reproducibilidad.
+
+Opción legacy (`x_crabs.py` + GUI principal):
 1. `./scripts/labctl agent start --profile default --port <PORT> --baud 115200`
 2. `./scripts/labctl gui start --foreground` (telemetría/log y benchmark)
 3. `python3 software/locomotion/x_crabs.py`
