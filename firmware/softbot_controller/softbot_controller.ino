@@ -1,9 +1,9 @@
 /**
- * @file softbot_controller_v15_max_attack.ino
- * @brief Controlador v15 - "MAXIMUM ATTACK" (Inflado Brusco Restaurado).
+ * @file softbot_controller_v16_pi_puro.ino
+ * @brief Controlador v16 - PI puro discreto con anti-windup.
  * @details
- * - Lógica Híbrida Agresiva: Si faltan > 5 kPa, PWM = 255 a TODO.
- * - Sin suavizado PID hasta el último momento.
+ * - Control PI puro en inflado y succión (sin rama agresiva por umbral).
+ * - Anti-windup simétrico con integración condicional y saturación de integrador.
  * - Hardware: 4 Bombas activas.
  */
 
@@ -99,9 +99,6 @@ const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
     {HW_MUX_CHAMBER_B, PIN_MUX_CHAMBER_B},
 };
 
-// UMBRALES DE AGRESIVIDAD
-// Si el error es mayor a esto, ignoramos el PID y damos 100%
-const float AGGRESSIVE_THRESHOLD = 5.0f;
 const int THRESHOLD_AUX_ENABLE = 40;
 
 const int PIN_I2C_SDA = 21;
@@ -195,6 +192,7 @@ uint32_t publish_soft_failures = 0;
     }                                                                                               \
   }
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux);
+void applySuctionControl(float error, int *pwm_main, int *pwm_aux);
 void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
                                     int16_t *active_aux);
 void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode);
@@ -280,39 +278,59 @@ void triggerEmergencyStop() {
   control_mode = 0;
 }
 
-float computePID_Positive(float error) {
-  integral_pos_sum += error * TS_SECONDS;
-  float i_term = Ki_pos * integral_pos_sum;
-  if (i_term > PWM_MAX)
-    integral_pos_sum = PWM_MAX / Ki_pos;
-  return (Kp_pos * error) + (Ki_pos * integral_pos_sum);
-}
+int computePIOutput(float error, float *integral_sum, float kp, float ki) {
+  float integral_candidate = *integral_sum + (error * TS_SECONDS);
+  float control_candidate = (kp * error) + (ki * integral_candidate);
 
-float computePID_Negative(float error) {
-  integral_neg_sum += error * TS_SECONDS;
-  float i_term = Ki_neg * integral_neg_sum;
-  if (i_term < -PWM_MAX)
-    integral_neg_sum = -PWM_MAX / Ki_neg;
-  return (Kp_neg * error) + (Ki_neg * integral_neg_sum);
+  float control_limited = control_candidate;
+  if (control_limited < 0.0f) {
+    control_limited = 0.0f;
+  }
+  if (control_limited > (float)PWM_MAX) {
+    control_limited = (float)PWM_MAX;
+  }
+
+  const bool sat_low = control_limited <= 0.0f;
+  const bool sat_high = control_limited >= (float)PWM_MAX;
+  const bool pushes_further =
+      (sat_low && control_candidate < 0.0f) || (sat_high && control_candidate > (float)PWM_MAX);
+
+  if (!pushes_further) {
+    *integral_sum = integral_candidate;
+  }
+
+  if (fabsf(ki) > 1e-6f) {
+    const float integral_limit = (float)PWM_MAX / fabsf(ki);
+    if (*integral_sum > integral_limit) {
+      *integral_sum = integral_limit;
+    } else if (*integral_sum < -integral_limit) {
+      *integral_sum = -integral_limit;
+    }
+  } else {
+    *integral_sum = 0.0f;
+  }
+
+  float control = (kp * error) + (ki * (*integral_sum));
+  if (control < 0.0f) {
+    control = 0.0f;
+  }
+  if (control > (float)PWM_MAX) {
+    control = (float)PWM_MAX;
+  }
+  return (int)roundf(control);
 }
 
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux) {
-  if (error > AGGRESSIVE_THRESHOLD) {
-    *pwm_main = PWM_MAX;
-    *pwm_aux = PWM_MAX;
-    integral_pos_sum = 0;
-    return;
-  }
-
-  float pid_out = computePID_Positive(error);
-  if (pid_out < 0)
-    pid_out = 0;
-  if (pid_out > PWM_MAX) {
-    *pwm_main = PWM_MAX;
+  *pwm_main = computePIOutput(error, &integral_pos_sum, Kp_pos, Ki_pos);
+  if (*pwm_main > THRESHOLD_AUX_ENABLE) {
+    *pwm_aux = *pwm_main;
   } else {
-    *pwm_main = (int)pid_out;
+    *pwm_aux = 0;
   }
+}
 
+void applySuctionControl(float error, int *pwm_main, int *pwm_aux) {
+  *pwm_main = computePIOutput(error, &integral_neg_sum, Kp_neg, Ki_neg);
   if (*pwm_main > THRESHOLD_AUX_ENABLE) {
     *pwm_aux = *pwm_main;
   } else {
@@ -441,7 +459,7 @@ void controlLoop() {
     stopActuators();
     integral_pos_sum = 0;
     integral_neg_sum = 0;
-  } else if (control_mode == MODE_PID_INFLATE) { // INFLAR (MAX ATTACK)
+  } else if (control_mode == MODE_PID_INFLATE) { // INFLAR PI PURO
     digitalWrite(PIN_VALVE_INFLATE, HIGH);
     digitalWrite(PIN_VALVE_SUCTION, LOW);
     ledcWrite(CH_SUCCION_MAIN, 0);
@@ -449,31 +467,12 @@ void controlLoop() {
     applyInflateControl(error, &pwm_main, &pwm_aux);
     ledcWrite(CH_INFLATE_MAIN, pwm_main);
     ledcWrite(CH_INFLATE_AUX, pwm_aux);
-  } else if (control_mode == MODE_PID_SUCTION) { // SUCCIONAR (MAX ATTACK)
+  } else if (control_mode == MODE_PID_SUCTION) { // SUCCIONAR PI PURO
     digitalWrite(PIN_VALVE_INFLATE, LOW);
     digitalWrite(PIN_VALVE_SUCTION, HIGH);
     ledcWrite(CH_INFLATE_MAIN, 0);
     ledcWrite(CH_INFLATE_AUX, 0);
-
-    if (error < -AGGRESSIVE_THRESHOLD) {
-      pwm_main = 255;
-      pwm_aux = 255;
-      integral_neg_sum = 0;
-    } else {
-      float pid_out = computePID_Negative(error);
-      if (pid_out < 0)
-        pid_out = 0;
-      if (pid_out > PWM_MAX)
-        pwm_main = PWM_MAX;
-      else
-        pwm_main = (int)pid_out;
-
-      if (pwm_main > THRESHOLD_AUX_ENABLE)
-        pwm_aux = pwm_main;
-      else
-        pwm_aux = 0;
-    }
-
+    applySuctionControl(error, &pwm_main, &pwm_aux);
     ledcWrite(CH_SUCCION_MAIN, pwm_main);
     ledcWrite(CH_SUCCION_AUX, pwm_aux);
   }

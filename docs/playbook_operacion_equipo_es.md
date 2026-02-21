@@ -297,9 +297,10 @@ Flujo recomendado:
 1. Define `pump_label` (ej: `actuales`, `nuevas_v2`).
 2. Selecciona cámaras A/B/C (por defecto `ABC (7)`) y configura targets.
 3. Ajusta ganancias PID (`Kp+`, `Ki+`, `Kp-`, `Ki-`) si vas a evaluar control cerrado.
-4. Ejecuta corrida dual y confirma estado `APTA/NO_APTA`.
-5. Repite con otra etiqueta y compara en histórico (solo `APTA`, ordenado por `score_final`).
-6. En el histórico, selecciona una o varias filas para ver comparativo visual de curvas en la gráfica.
+4. Ajusta límites de seguridad (`Safety +max`, `Safety -min`) para habilitar corte preventivo.
+5. Ejecuta corrida dual y confirma estado `APTA/NO_APTA`.
+6. Repite con otra etiqueta y compara en histórico (solo `APTA`, ordenado por `score_final`).
+7. En el histórico, selecciona una o varias filas para ver comparativo visual de curvas en la gráfica.
 
 Archivos generados por sesión:
 - `experiments/YYYY-MM/pump_eval_raw_*.csv`

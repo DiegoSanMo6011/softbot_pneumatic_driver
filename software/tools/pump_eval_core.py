@@ -38,6 +38,10 @@ PHASES = (
 )
 
 
+class SafetyBreakError(RuntimeError):
+    """Raised when pressure exits configured safety envelope."""
+
+
 @dataclass
 class SamplePoint:
     run_idx: int
@@ -62,6 +66,8 @@ class PhaseMetrics:
     time_to_target_s: float | None
     time_to_target_session_s: float | None
     target_hit: bool
+    overshoot_kpa: float | None
+    settling_time_s: float | None
 
 
 @dataclass
@@ -73,6 +79,12 @@ class RunMetrics:
     time_to_top_vacuum_s: float
     time_to_target_pressure_s: float | None
     time_to_target_vacuum_s: float | None
+    overshoot_pressure_kpa: float
+    overshoot_vacuum_kpa: float
+    settling_pressure_s: float | None
+    settling_vacuum_s: float | None
+    stable_pressure: bool
+    stable_vacuum: bool
     hit_target_pressure: bool
     hit_target_vacuum: bool
     valid: bool
@@ -84,6 +96,8 @@ class AggregateMetrics:
     chamber: int
     target_pressure_kpa: float
     target_vacuum_kpa: float
+    safety_max_kpa: float
+    safety_min_kpa: float
     timeout_phase_s: float
     pwm_capacity: int
     filter_window: int
@@ -102,11 +116,19 @@ class AggregateMetrics:
     time_to_target_vacuum_mean_s: float | None
     time_to_target_pressure_eff_mean_s: float
     time_to_target_vacuum_eff_mean_s: float
+    overshoot_pressure_mean_kpa: float
+    overshoot_vacuum_mean_kpa: float
+    settling_pressure_mean_s: float | None
+    settling_vacuum_mean_s: float | None
+    settling_pressure_eff_mean_s: float
+    settling_vacuum_eff_mean_s: float
     cap_presion: float
     cap_vacio: float
     vel_presion: float
     vel_vacio: float
     score_base: float
+    penalty_variability: float
+    penalty_stability: float
     penalty: float
     score_final: float
     cv_t_target_pressure: float
@@ -162,6 +184,63 @@ def coeff_var(values: list[float]) -> float:
     if math.isclose(mean, 0.0, abs_tol=1e-9):
         return 0.0
     return abs(safe_std(values) / mean)
+
+
+def _target_crossed(value: float, target: float, phase: str) -> bool:
+    if phase == PHASE_TARGET_PRESSURE:
+        return value >= target
+    if phase == PHASE_TARGET_VACUUM:
+        return value <= target
+    return False
+
+
+def overshoot_kpa(values: list[float], target: float, phase: str) -> float:
+    if not values:
+        return 0.0
+    if phase == PHASE_TARGET_PRESSURE:
+        return max(0.0, max(values) - target)
+    if phase == PHASE_TARGET_VACUUM:
+        return max(0.0, target - min(values))
+    return 0.0
+
+
+def settling_time(
+    t_values: list[float],
+    y_values: list[float],
+    *,
+    target: float,
+    phase: str,
+    band_kpa: float,
+    hold_s: float,
+) -> float | None:
+    if not t_values or not y_values or len(t_values) != len(y_values):
+        return None
+    band = max(0.0, float(band_kpa))
+    hold = max(0.0, float(hold_s))
+
+    start_idx = None
+    for idx, value in enumerate(y_values):
+        if _target_crossed(value, target, phase):
+            start_idx = idx
+            break
+    if start_idx is None:
+        return None
+
+    n = len(t_values)
+    for i in range(start_idx, n):
+        if abs(y_values[i] - target) > band:
+            continue
+        t0 = t_values[i]
+        j = i
+        stable = True
+        while j < n and (t_values[j] - t0) < hold:
+            if abs(y_values[j] - target) > band:
+                stable = False
+                break
+            j += 1
+        if stable and (hold <= 0.0 or (t_values[min(j, n - 1)] - t0) >= hold):
+            return t0
+    return None
 
 
 def month_output_dir() -> str:
@@ -291,6 +370,8 @@ class PumpEvalRunner:
             "ki_pos": float(self.args.ki_pos),
             "kp_neg": float(self.args.kp_neg),
             "ki_neg": float(self.args.ki_neg),
+            "max_safe": float(self.args.safety_max_kpa),
+            "min_safe": float(self.args.safety_min_kpa),
         }
 
         if self.args.demo:
@@ -299,6 +380,44 @@ class PumpEvalRunner:
 
         self.bot.update_tuning(**tuning)
         emit_event("tuning_applied", demo=False, **tuning)
+
+    def _trigger_safety_break(
+        self,
+        *,
+        run_idx: int,
+        phase: str,
+        t_phase_s: float,
+        pressure_raw_kpa: float,
+        pressure_filtered_kpa: float,
+    ) -> None:
+        t_session_s = self._session_elapsed()
+        max_kpa = float(self.args.safety_max_kpa)
+        min_kpa = float(self.args.safety_min_kpa)
+
+        emit_event(
+            "safety_break",
+            run_idx=run_idx,
+            phase=phase,
+            t_session_s=t_session_s,
+            t_phase_s=t_phase_s,
+            pressure_raw_kpa=pressure_raw_kpa,
+            pressure_filtered_kpa=pressure_filtered_kpa,
+            safety_max_kpa=max_kpa,
+            safety_min_kpa=min_kpa,
+        )
+
+        try:
+            self.bot.stop()
+            self.bot.vent(chamber_id=self.args.chamber, duration_s=self.args.vent_s)
+            self.bot.stop()
+        except Exception:
+            pass
+
+        raise SafetyBreakError(
+            "Safety break activado: "
+            f"presion={pressure_filtered_kpa:.3f} kPa (raw={pressure_raw_kpa:.3f}) "
+            f"fuera de rango [{min_kpa:.3f}, {max_kpa:.3f}] kPa"
+        )
 
     def close(self) -> None:
         try:
@@ -401,6 +520,8 @@ class PumpEvalRunner:
         target_hit = False
         t_target_s: float | None = None
         t_target_session_s: float | None = None
+        phase_t_values: list[float] = []
+        phase_filtered_values: list[float] = []
 
         best_value = -1e9 if phase in (PHASE_CAP_PRESSURE, PHASE_TARGET_PRESSURE) else 1e9
         t_best_s = 0.0
@@ -415,6 +536,8 @@ class PumpEvalRunner:
             pressure_filtered = self.filter.add(pressure_raw)
             pwm_main = int(state.get("pwm_main", 0))
             pwm_aux = int(state.get("pwm_aux", 0))
+            phase_t_values.append(t_phase_s)
+            phase_filtered_values.append(pressure_filtered)
 
             self._emit_sample(
                 run_idx=run_idx,
@@ -425,6 +548,22 @@ class PumpEvalRunner:
                 pwm_main=pwm_main,
                 pwm_aux=pwm_aux,
             )
+
+            max_kpa = float(self.args.safety_max_kpa)
+            min_kpa = float(self.args.safety_min_kpa)
+            if (
+                pressure_raw >= max_kpa
+                or pressure_filtered >= max_kpa
+                or pressure_raw <= min_kpa
+                or pressure_filtered <= min_kpa
+            ):
+                self._trigger_safety_break(
+                    run_idx=run_idx,
+                    phase=phase,
+                    t_phase_s=t_phase_s,
+                    pressure_raw_kpa=pressure_raw,
+                    pressure_filtered_kpa=pressure_filtered,
+                )
 
             if phase in (PHASE_CAP_PRESSURE, PHASE_TARGET_PRESSURE):
                 if pressure_filtered > best_value:
@@ -463,6 +602,19 @@ class PumpEvalRunner:
         self.bot.vent(chamber_id=self.args.chamber, duration_s=self.args.vent_s)
         time.sleep(max(0.0, float(self.args.rest_s)))
 
+        phase_overshoot: float | None = None
+        phase_settling: float | None = None
+        if target is not None:
+            phase_overshoot = overshoot_kpa(phase_filtered_values, target, phase)
+            phase_settling = settling_time(
+                phase_t_values,
+                phase_filtered_values,
+                target=target,
+                phase=phase,
+                band_kpa=float(self.args.settle_band_kpa),
+                hold_s=float(self.args.settle_hold_s),
+            )
+
         t_end_session = self._session_elapsed()
         metrics = PhaseMetrics(
             run_idx=run_idx,
@@ -475,6 +627,8 @@ class PumpEvalRunner:
             time_to_target_s=t_target_s,
             time_to_target_session_s=t_target_session_s,
             target_hit=target_hit,
+            overshoot_kpa=phase_overshoot,
+            settling_time_s=phase_settling,
         )
         self.phase_metrics.append(metrics)
         emit_event(
@@ -491,20 +645,46 @@ class PumpEvalRunner:
         for phase in PHASES:
             phase_map[phase] = self._collect_phase(run_idx=run_idx, phase=phase)
 
+        target_pressure = phase_map[PHASE_TARGET_PRESSURE]
+        target_vacuum = phase_map[PHASE_TARGET_VACUUM]
+        overshoot_pressure = float(target_pressure.overshoot_kpa or 0.0)
+        overshoot_vacuum = float(target_vacuum.overshoot_kpa or 0.0)
+        settling_pressure = target_pressure.settling_time_s
+        settling_vacuum = target_vacuum.settling_time_s
+
+        stable_pressure = bool(
+            target_pressure.target_hit
+            and settling_pressure is not None
+            and overshoot_pressure <= float(self.args.max_overshoot_pressure_kpa)
+        )
+        stable_vacuum = bool(
+            target_vacuum.target_hit
+            and settling_vacuum is not None
+            and overshoot_vacuum <= float(self.args.max_overshoot_vacuum_kpa)
+        )
+        targets_ok = bool(target_pressure.target_hit and target_vacuum.target_hit)
+        if bool(self.args.require_stability):
+            valid = bool(targets_ok and stable_pressure and stable_vacuum)
+        else:
+            valid = targets_ok
+
         run = RunMetrics(
             run_idx=run_idx,
             top_pressure_kpa=float(phase_map[PHASE_CAP_PRESSURE].top_kpa),
             time_to_top_pressure_s=float(phase_map[PHASE_CAP_PRESSURE].time_to_top_s),
             top_vacuum_kpa=float(phase_map[PHASE_CAP_VACUUM].top_kpa),
             time_to_top_vacuum_s=float(phase_map[PHASE_CAP_VACUUM].time_to_top_s),
-            time_to_target_pressure_s=phase_map[PHASE_TARGET_PRESSURE].time_to_target_s,
-            time_to_target_vacuum_s=phase_map[PHASE_TARGET_VACUUM].time_to_target_s,
-            hit_target_pressure=bool(phase_map[PHASE_TARGET_PRESSURE].target_hit),
-            hit_target_vacuum=bool(phase_map[PHASE_TARGET_VACUUM].target_hit),
-            valid=bool(
-                phase_map[PHASE_TARGET_PRESSURE].target_hit
-                and phase_map[PHASE_TARGET_VACUUM].target_hit
-            ),
+            time_to_target_pressure_s=target_pressure.time_to_target_s,
+            time_to_target_vacuum_s=target_vacuum.time_to_target_s,
+            overshoot_pressure_kpa=overshoot_pressure,
+            overshoot_vacuum_kpa=overshoot_vacuum,
+            settling_pressure_s=settling_pressure,
+            settling_vacuum_s=settling_vacuum,
+            stable_pressure=stable_pressure,
+            stable_vacuum=stable_vacuum,
+            hit_target_pressure=bool(target_pressure.target_hit),
+            hit_target_vacuum=bool(target_vacuum.target_hit),
+            valid=valid,
         )
         self.run_metrics.append(run)
         emit_event("run_end", **asdict(run))
@@ -541,6 +721,30 @@ class PumpEvalRunner:
             else float(self.args.timeout_phase_s)
             for row in self.run_metrics
         ]
+        overshoot_pressure = [float(row.overshoot_pressure_kpa) for row in self.run_metrics]
+        overshoot_vacuum = [float(row.overshoot_vacuum_kpa) for row in self.run_metrics]
+        settling_pressure = [
+            float(row.settling_pressure_s)
+            for row in self.run_metrics
+            if row.settling_pressure_s is not None
+        ]
+        settling_vacuum = [
+            float(row.settling_vacuum_s)
+            for row in self.run_metrics
+            if row.settling_vacuum_s is not None
+        ]
+        settling_pressure_eff = [
+            float(row.settling_pressure_s)
+            if row.settling_pressure_s is not None
+            else float(self.args.timeout_phase_s)
+            for row in self.run_metrics
+        ]
+        settling_vacuum_eff = [
+            float(row.settling_vacuum_s)
+            if row.settling_vacuum_s is not None
+            else float(self.args.timeout_phase_s)
+            for row in self.run_metrics
+        ]
 
         apta = all(row.valid for row in self.run_metrics)
 
@@ -556,6 +760,12 @@ class PumpEvalRunner:
 
         ttarget_pressure_eff_mean = safe_mean(ttarget_pressure_eff)
         ttarget_vacuum_eff_mean = safe_mean(ttarget_vacuum_eff)
+        overshoot_pressure_mean = safe_mean(overshoot_pressure)
+        overshoot_vacuum_mean = safe_mean(overshoot_vacuum)
+        settling_pressure_mean = safe_mean(settling_pressure) if settling_pressure else None
+        settling_vacuum_mean = safe_mean(settling_vacuum) if settling_vacuum else None
+        settling_pressure_eff_mean = safe_mean(settling_pressure_eff)
+        settling_vacuum_eff_mean = safe_mean(settling_vacuum_eff)
 
         cap_presion = (
             clamp(top_pressure_mean / float(self.args.target_pressure_kpa), 0.0, 1.5) / 1.5
@@ -583,7 +793,7 @@ class PumpEvalRunner:
         cv_top_pressure = coeff_var(tops_pressure)
         cv_top_vacuum = coeff_var(tops_vacuum_abs)
 
-        penalty = min(
+        penalty_variability = min(
             0.30,
             0.10 * cv_t_target_pressure
             + 0.10 * cv_t_target_vacuum
@@ -591,6 +801,34 @@ class PumpEvalRunner:
             + 0.05 * cv_top_vacuum,
         )
 
+        overshoot_pressure_norm = clamp(
+            overshoot_pressure_mean / max(1e-9, float(self.args.max_overshoot_pressure_kpa)),
+            0.0,
+            3.0,
+        )
+        overshoot_vacuum_norm = clamp(
+            overshoot_vacuum_mean / max(1e-9, float(self.args.max_overshoot_vacuum_kpa)),
+            0.0,
+            3.0,
+        )
+        settling_pressure_norm = clamp(
+            settling_pressure_eff_mean / float(self.args.timeout_phase_s),
+            0.0,
+            1.5,
+        )
+        settling_vacuum_norm = clamp(
+            settling_vacuum_eff_mean / float(self.args.timeout_phase_s),
+            0.0,
+            1.5,
+        )
+        penalty_stability = min(
+            0.40,
+            0.10 * overshoot_pressure_norm
+            + 0.10 * overshoot_vacuum_norm
+            + 0.10 * settling_pressure_norm
+            + 0.10 * settling_vacuum_norm,
+        )
+        penalty = min(0.60, penalty_variability + penalty_stability)
         score_final = max(0.0, score_base - penalty) * 100.0
 
         return AggregateMetrics(
@@ -598,6 +836,8 @@ class PumpEvalRunner:
             chamber=int(self.args.chamber),
             target_pressure_kpa=float(self.args.target_pressure_kpa),
             target_vacuum_kpa=float(self.args.target_vacuum_kpa),
+            safety_max_kpa=float(self.args.safety_max_kpa),
+            safety_min_kpa=float(self.args.safety_min_kpa),
             timeout_phase_s=float(self.args.timeout_phase_s),
             pwm_capacity=int(self.args.pwm_capacity),
             filter_window=int(self.args.filter_window),
@@ -616,11 +856,19 @@ class PumpEvalRunner:
             time_to_target_vacuum_mean_s=ttarget_vacuum_mean,
             time_to_target_pressure_eff_mean_s=ttarget_pressure_eff_mean,
             time_to_target_vacuum_eff_mean_s=ttarget_vacuum_eff_mean,
+            overshoot_pressure_mean_kpa=overshoot_pressure_mean,
+            overshoot_vacuum_mean_kpa=overshoot_vacuum_mean,
+            settling_pressure_mean_s=settling_pressure_mean,
+            settling_vacuum_mean_s=settling_vacuum_mean,
+            settling_pressure_eff_mean_s=settling_pressure_eff_mean,
+            settling_vacuum_eff_mean_s=settling_vacuum_eff_mean,
             cap_presion=cap_presion,
             cap_vacio=cap_vacio,
             vel_presion=vel_presion,
             vel_vacio=vel_vacio,
             score_base=score_base,
+            penalty_variability=penalty_variability,
+            penalty_stability=penalty_stability,
             penalty=penalty,
             score_final=score_final,
             cv_t_target_pressure=cv_t_target_pressure,
@@ -637,12 +885,19 @@ class PumpEvalRunner:
             runs=self.args.runs,
             target_pressure_kpa=self.args.target_pressure_kpa,
             target_vacuum_kpa=self.args.target_vacuum_kpa,
+            safety_max_kpa=self.args.safety_max_kpa,
+            safety_min_kpa=self.args.safety_min_kpa,
             pwm_capacity=self.args.pwm_capacity,
             timeout_phase_s=self.args.timeout_phase_s,
             sample_ms=self.args.sample_ms,
             vent_s=self.args.vent_s,
             rest_s=self.args.rest_s,
             filter_window=self.args.filter_window,
+            settle_band_kpa=self.args.settle_band_kpa,
+            settle_hold_s=self.args.settle_hold_s,
+            max_overshoot_pressure_kpa=self.args.max_overshoot_pressure_kpa,
+            max_overshoot_vacuum_kpa=self.args.max_overshoot_vacuum_kpa,
+            require_stability=bool(self.args.require_stability),
             kp_pos=self.args.kp_pos,
             ki_pos=self.args.ki_pos,
             kp_neg=self.args.kp_neg,
@@ -679,6 +934,10 @@ class PumpEvalRunner:
             time_to_top_vacuum_mean_s=aggregate.time_to_top_vacuum_mean_s,
             time_to_target_pressure_mean_s=aggregate.time_to_target_pressure_mean_s,
             time_to_target_vacuum_mean_s=aggregate.time_to_target_vacuum_mean_s,
+            overshoot_pressure_mean_kpa=aggregate.overshoot_pressure_mean_kpa,
+            overshoot_vacuum_mean_kpa=aggregate.overshoot_vacuum_mean_kpa,
+            settling_pressure_mean_s=aggregate.settling_pressure_mean_s,
+            settling_vacuum_mean_s=aggregate.settling_vacuum_mean_s,
             raw_csv=os.path.relpath(raw_path, REPO_ROOT),
             summary_csv=os.path.relpath(summary_path, REPO_ROOT),
         )
@@ -734,6 +993,12 @@ def write_summary_csv(path: str, run_rows: list[RunMetrics], aggregate: Aggregat
                 "time_to_top_vacuum_s",
                 "time_to_target_pressure_s",
                 "time_to_target_vacuum_s",
+                "overshoot_pressure_kpa",
+                "overshoot_vacuum_kpa",
+                "settling_pressure_s",
+                "settling_vacuum_s",
+                "stable_pressure",
+                "stable_vacuum",
                 "hit_target_pressure",
                 "hit_target_vacuum",
                 "valid",
@@ -749,6 +1014,12 @@ def write_summary_csv(path: str, run_rows: list[RunMetrics], aggregate: Aggregat
                     _num(row.time_to_top_vacuum_s),
                     _num(row.time_to_target_pressure_s),
                     _num(row.time_to_target_vacuum_s),
+                    _num(row.overshoot_pressure_kpa),
+                    _num(row.overshoot_vacuum_kpa),
+                    _num(row.settling_pressure_s),
+                    _num(row.settling_vacuum_s),
+                    int(row.stable_pressure),
+                    int(row.stable_vacuum),
                     int(row.hit_target_pressure),
                     int(row.hit_target_vacuum),
                     int(row.valid),
@@ -798,6 +1069,11 @@ def append_registry(
                     "vent_s",
                     "rest_s",
                     "filter_window",
+                    "settle_band_kpa",
+                    "settle_hold_s",
+                    "max_overshoot_pressure_kpa",
+                    "max_overshoot_vacuum_kpa",
+                    "require_stability",
                     "top_pressure_mean_kpa",
                     "top_pressure_std_kpa",
                     "top_vacuum_mean_kpa",
@@ -808,6 +1084,12 @@ def append_registry(
                     "time_to_target_vacuum_mean_s",
                     "time_to_target_pressure_eff_mean_s",
                     "time_to_target_vacuum_eff_mean_s",
+                    "overshoot_pressure_mean_kpa",
+                    "overshoot_vacuum_mean_kpa",
+                    "settling_pressure_mean_s",
+                    "settling_vacuum_mean_s",
+                    "settling_pressure_eff_mean_s",
+                    "settling_vacuum_eff_mean_s",
                     "cv_t_target_pressure",
                     "cv_t_target_vacuum",
                     "cv_top_pressure",
@@ -834,6 +1116,11 @@ def append_registry(
                 _num(args.vent_s),
                 _num(args.rest_s),
                 aggregate.filter_window,
+                _num(args.settle_band_kpa),
+                _num(args.settle_hold_s),
+                _num(args.max_overshoot_pressure_kpa),
+                _num(args.max_overshoot_vacuum_kpa),
+                int(bool(args.require_stability)),
                 _num(aggregate.top_pressure_mean_kpa),
                 _num(aggregate.top_pressure_std_kpa),
                 _num(aggregate.top_vacuum_mean_kpa),
@@ -844,6 +1131,12 @@ def append_registry(
                 _num(aggregate.time_to_target_vacuum_mean_s),
                 _num(aggregate.time_to_target_pressure_eff_mean_s),
                 _num(aggregate.time_to_target_vacuum_eff_mean_s),
+                _num(aggregate.overshoot_pressure_mean_kpa),
+                _num(aggregate.overshoot_vacuum_mean_kpa),
+                _num(aggregate.settling_pressure_mean_s),
+                _num(aggregate.settling_vacuum_mean_s),
+                _num(aggregate.settling_pressure_eff_mean_s),
+                _num(aggregate.settling_vacuum_eff_mean_s),
                 _num(aggregate.cv_t_target_pressure),
                 _num(aggregate.cv_t_target_vacuum),
                 _num(aggregate.cv_top_pressure),
@@ -867,6 +1160,18 @@ def _same_float(a: float | None, b: float, eps: float = 1e-6) -> bool:
     return a is not None and abs(a - float(b)) <= eps
 
 
+def _matches_or_unknown(
+    row: dict[str, str],
+    key: str,
+    target: float,
+    eps: float = 1e-6,
+) -> bool:
+    value = _row_float(row, key)
+    if value is None:
+        return True
+    return abs(value - float(target)) <= eps
+
+
 def historical_ranking(path: str, args: argparse.Namespace) -> list[dict[str, str]]:
     if not os.path.exists(path):
         return []
@@ -879,20 +1184,21 @@ def historical_ranking(path: str, args: argparse.Namespace) -> list[dict[str, st
                 continue
 
             chamber_raw = (row.get("chamber", "") or "").strip()
-            try:
-                chamber = int(chamber_raw)
-            except ValueError:
-                continue
-            if chamber != int(args.chamber):
-                continue
+            if chamber_raw:
+                try:
+                    chamber = int(chamber_raw)
+                except ValueError:
+                    continue
+                if chamber != int(args.chamber):
+                    continue
 
-            if not _same_float(_row_float(row, "target_pressure_kpa"), args.target_pressure_kpa):
+            if not _matches_or_unknown(row, "target_pressure_kpa", args.target_pressure_kpa):
                 continue
-            if not _same_float(_row_float(row, "target_vacuum_kpa"), args.target_vacuum_kpa):
+            if not _matches_or_unknown(row, "target_vacuum_kpa", args.target_vacuum_kpa):
                 continue
-            if not _same_float(_row_float(row, "timeout_phase_s"), args.timeout_phase_s):
+            if not _matches_or_unknown(row, "timeout_phase_s", args.timeout_phase_s):
                 continue
-            if not _same_float(_row_float(row, "pwm_capacity"), float(args.pwm_capacity)):
+            if not _matches_or_unknown(row, "pwm_capacity", float(args.pwm_capacity)):
                 continue
 
             rows.append(row)
@@ -920,6 +1226,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--target-pressure-kpa", type=float, default=25.0)
     parser.add_argument("--target-vacuum-kpa", type=float, default=-15.0)
+    parser.add_argument("--safety-max-kpa", type=float, default=45.0)
+    parser.add_argument("--safety-min-kpa", type=float, default=-45.0)
     parser.add_argument("--kp-pos", type=float, default=24.0)
     parser.add_argument("--ki-pos", type=float, default=1500.0)
     parser.add_argument("--kp-neg", type=float, default=-75.0)
@@ -931,6 +1239,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vent-s", type=float, default=0.6)
     parser.add_argument("--rest-s", type=float, default=0.4)
     parser.add_argument("--filter-window", type=int, default=5)
+    parser.add_argument("--settle-band-kpa", type=float, default=1.0)
+    parser.add_argument("--settle-hold-s", type=float, default=0.4)
+    parser.add_argument("--max-overshoot-pressure-kpa", type=float, default=2.0)
+    parser.add_argument("--max-overshoot-vacuum-kpa", type=float, default=2.0)
+    parser.add_argument(
+        "--require-stability",
+        dest="require_stability",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-require-stability",
+        dest="require_stability",
+        action="store_false",
+    )
     parser.add_argument("--tag", type=str, default="")
     parser.add_argument("--registry-csv", type=str, default="experiments/pump_eval_registry.csv")
     parser.add_argument("--no-registry", action="store_true")
@@ -947,6 +1270,16 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--target-pressure-kpa debe ser > 0")
     if float(args.target_vacuum_kpa) >= 0:
         raise SystemExit("--target-vacuum-kpa debe ser < 0")
+    if not math.isfinite(float(args.safety_max_kpa)):
+        raise SystemExit("--safety-max-kpa debe ser finito")
+    if not math.isfinite(float(args.safety_min_kpa)):
+        raise SystemExit("--safety-min-kpa debe ser finito")
+    if float(args.safety_max_kpa) <= 0:
+        raise SystemExit("--safety-max-kpa debe ser > 0")
+    if float(args.safety_min_kpa) >= 0:
+        raise SystemExit("--safety-min-kpa debe ser < 0")
+    if float(args.safety_min_kpa) >= float(args.safety_max_kpa):
+        raise SystemExit("--safety-min-kpa debe ser menor que --safety-max-kpa")
     for key in ("kp_pos", "ki_pos", "kp_neg", "ki_neg"):
         value = float(getattr(args, key))
         if not math.isfinite(value):
@@ -961,6 +1294,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--sample-ms debe ser >= 1")
     if int(args.filter_window) < 1:
         raise SystemExit("--filter-window debe ser >= 1")
+    if float(args.settle_band_kpa) < 0:
+        raise SystemExit("--settle-band-kpa debe ser >= 0")
+    if float(args.settle_hold_s) < 0:
+        raise SystemExit("--settle-hold-s debe ser >= 0")
+    if float(args.max_overshoot_pressure_kpa) <= 0:
+        raise SystemExit("--max-overshoot-pressure-kpa debe ser > 0")
+    if float(args.max_overshoot_vacuum_kpa) <= 0:
+        raise SystemExit("--max-overshoot-vacuum-kpa debe ser > 0")
 
 
 def main() -> int:
@@ -978,6 +1319,20 @@ def main() -> int:
         print(f"- Score final: {aggregate.score_final:.3f}")
         print(f"- Top pressure mean: {aggregate.top_pressure_mean_kpa:.3f} kPa")
         print(f"- Top vacuum mean: {aggregate.top_vacuum_mean_kpa:.3f} kPa")
+        print(f"- Overshoot pressure mean: {aggregate.overshoot_pressure_mean_kpa:.3f} kPa")
+        print(f"- Overshoot vacuum mean: {aggregate.overshoot_vacuum_mean_kpa:.3f} kPa")
+        print(
+            "- Settling pressure mean: "
+            f"{aggregate.settling_pressure_mean_s:.3f} s"
+            if aggregate.settling_pressure_mean_s is not None
+            else "- Settling pressure mean: N/A"
+        )
+        print(
+            "- Settling vacuum mean: "
+            f"{aggregate.settling_vacuum_mean_s:.3f} s"
+            if aggregate.settling_vacuum_mean_s is not None
+            else "- Settling vacuum mean: N/A"
+        )
         print(f"- Raw CSV: {raw_path}")
         print(f"- Summary CSV: {summary_path}")
 
@@ -1006,6 +1361,10 @@ def main() -> int:
     except KeyboardInterrupt:
         emit_event("cancelled", message="Interrupted by user")
         return 130
+    except SafetyBreakError as exc:
+        emit_event("error", kind="safety_break", message=str(exc))
+        print(f"SAFETY_BREAK: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:
         emit_event("error", message=str(exc))
         print(f"ERROR: {exc}", file=sys.stderr)

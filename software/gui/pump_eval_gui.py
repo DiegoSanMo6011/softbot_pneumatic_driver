@@ -44,6 +44,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
         self.last_summary_csv: str | None = None
         self.last_raw_csv: str | None = None
+        self.safety_break_triggered = False
 
         self.setWindowTitle("Pump Evaluator GUI (selección de cámaras)")
         self.resize(1400, 860)
@@ -104,22 +105,22 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.spin_kp_pos = QtWidgets.QDoubleSpinBox()
         self.spin_kp_pos.setRange(-2000.0, 2000.0)
         self.spin_kp_pos.setDecimals(3)
-        self.spin_kp_pos.setValue(24.0)
+        self.spin_kp_pos.setValue(19.185)
 
         self.spin_ki_pos = QtWidgets.QDoubleSpinBox()
         self.spin_ki_pos.setRange(-10000.0, 10000.0)
         self.spin_ki_pos.setDecimals(3)
-        self.spin_ki_pos.setValue(1500.0)
+        self.spin_ki_pos.setValue(104.160)
 
         self.spin_kp_neg = QtWidgets.QDoubleSpinBox()
         self.spin_kp_neg.setRange(-2000.0, 2000.0)
         self.spin_kp_neg.setDecimals(3)
-        self.spin_kp_neg.setValue(-75.0)
+        self.spin_kp_neg.setValue(-25.768)
 
         self.spin_ki_neg = QtWidgets.QDoubleSpinBox()
         self.spin_ki_neg.setRange(-10000.0, 10000.0)
         self.spin_ki_neg.setDecimals(3)
-        self.spin_ki_neg.setValue(-750.0)
+        self.spin_ki_neg.setValue(-52.966)
 
         self.spin_target_pressure = QtWidgets.QDoubleSpinBox()
         self.spin_target_pressure.setRange(1.0, 80.0)
@@ -132,6 +133,18 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.spin_target_vacuum.setDecimals(2)
         self.spin_target_vacuum.setValue(-15.0)
         self.spin_target_vacuum.setSuffix(" kPa")
+
+        self.spin_safety_max = QtWidgets.QDoubleSpinBox()
+        self.spin_safety_max.setRange(1.0, 120.0)
+        self.spin_safety_max.setDecimals(2)
+        self.spin_safety_max.setValue(45.0)
+        self.spin_safety_max.setSuffix(" kPa")
+
+        self.spin_safety_min = QtWidgets.QDoubleSpinBox()
+        self.spin_safety_min.setRange(-120.0, -1.0)
+        self.spin_safety_min.setDecimals(2)
+        self.spin_safety_min.setValue(-45.0)
+        self.spin_safety_min.setSuffix(" kPa")
 
         self.spin_pwm_capacity = QtWidgets.QSpinBox()
         self.spin_pwm_capacity.setRange(0, 255)
@@ -170,6 +183,33 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.spin_filter_window.setValue(5)
         self.spin_filter_window.setToolTip("Ventana del filtro mediana (se recomienda impar)")
 
+        self.spin_settle_band_kpa = QtWidgets.QDoubleSpinBox()
+        self.spin_settle_band_kpa.setRange(0.0, 20.0)
+        self.spin_settle_band_kpa.setDecimals(2)
+        self.spin_settle_band_kpa.setValue(1.0)
+        self.spin_settle_band_kpa.setSuffix(" kPa")
+
+        self.spin_settle_hold_s = QtWidgets.QDoubleSpinBox()
+        self.spin_settle_hold_s.setRange(0.0, 10.0)
+        self.spin_settle_hold_s.setDecimals(2)
+        self.spin_settle_hold_s.setValue(0.4)
+        self.spin_settle_hold_s.setSuffix(" s")
+
+        self.spin_max_overshoot_pressure = QtWidgets.QDoubleSpinBox()
+        self.spin_max_overshoot_pressure.setRange(0.1, 30.0)
+        self.spin_max_overshoot_pressure.setDecimals(2)
+        self.spin_max_overshoot_pressure.setValue(2.0)
+        self.spin_max_overshoot_pressure.setSuffix(" kPa")
+
+        self.spin_max_overshoot_vacuum = QtWidgets.QDoubleSpinBox()
+        self.spin_max_overshoot_vacuum.setRange(0.1, 30.0)
+        self.spin_max_overshoot_vacuum.setDecimals(2)
+        self.spin_max_overshoot_vacuum.setValue(2.0)
+        self.spin_max_overshoot_vacuum.setSuffix(" kPa")
+
+        self.cb_require_stability = QtWidgets.QCheckBox("Exigir estabilidad para APTA")
+        self.cb_require_stability.setChecked(True)
+
         self.input_registry_csv = QtWidgets.QLineEdit("experiments/pump_eval_registry.csv")
 
         self.cb_demo = QtWidgets.QCheckBox("Modo demo (sin hardware)")
@@ -204,6 +244,8 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.spin_ki_neg,
             self.spin_target_pressure,
             self.spin_target_vacuum,
+            self.spin_safety_max,
+            self.spin_safety_min,
             self.spin_pwm_capacity,
             self.spin_timeout_phase,
             self.spin_runs,
@@ -211,6 +253,10 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.spin_vent_s,
             self.spin_rest_s,
             self.spin_filter_window,
+            self.spin_settle_band_kpa,
+            self.spin_settle_hold_s,
+            self.spin_max_overshoot_pressure,
+            self.spin_max_overshoot_vacuum,
             self.input_registry_csv,
             self.btn_start,
             self.btn_cancel,
@@ -219,7 +265,13 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         ]
         for control in controls:
             control.setMinimumHeight(30)
-        for cb in (self.cb_chamber_a, self.cb_chamber_b, self.cb_chamber_c, self.cb_demo):
+        for cb in (
+            self.cb_chamber_a,
+            self.cb_chamber_b,
+            self.cb_chamber_c,
+            self.cb_demo,
+            self.cb_require_stability,
+        ):
             cb.setMinimumHeight(26)
 
         form.addRow("Pump label", self.input_pump_label)
@@ -230,6 +282,8 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         form.addRow("Ki-", self.spin_ki_neg)
         form.addRow("Target presión", self.spin_target_pressure)
         form.addRow("Target vacío", self.spin_target_vacuum)
+        form.addRow("Safety +max", self.spin_safety_max)
+        form.addRow("Safety -min", self.spin_safety_min)
         form.addRow("PWM capacidad", self.spin_pwm_capacity)
         form.addRow("Timeout por fase", self.spin_timeout_phase)
         form.addRow("Runs", self.spin_runs)
@@ -237,6 +291,11 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         form.addRow("Vent", self.spin_vent_s)
         form.addRow("Rest", self.spin_rest_s)
         form.addRow("Filtro mediana", self.spin_filter_window)
+        form.addRow("Banda settling", self.spin_settle_band_kpa)
+        form.addRow("Hold settling", self.spin_settle_hold_s)
+        form.addRow("Overshoot max presión", self.spin_max_overshoot_pressure)
+        form.addRow("Overshoot max vacío", self.spin_max_overshoot_vacuum)
+        form.addRow(self.cb_require_stability)
         form.addRow("Registry CSV", self.input_registry_csv)
         form.addRow(self.cb_demo)
         form.addRow(buttons)
@@ -274,6 +333,10 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.card_time_top_vacuum = QtWidgets.QLabel("-")
         self.card_ttarget_pressure = QtWidgets.QLabel("-")
         self.card_ttarget_vacuum = QtWidgets.QLabel("-")
+        self.card_overshoot_pressure = QtWidgets.QLabel("-")
+        self.card_overshoot_vacuum = QtWidgets.QLabel("-")
+        self.card_settling_pressure = QtWidgets.QLabel("-")
+        self.card_settling_vacuum = QtWidgets.QLabel("-")
         self.card_apta = QtWidgets.QLabel("-")
         self.card_score = QtWidgets.QLabel("-")
         self.card_phase = QtWidgets.QLabel("-")
@@ -286,6 +349,10 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.card_time_top_vacuum,
             self.card_ttarget_pressure,
             self.card_ttarget_vacuum,
+            self.card_overshoot_pressure,
+            self.card_overshoot_vacuum,
+            self.card_settling_pressure,
+            self.card_settling_vacuum,
             self.card_apta,
             self.card_score,
             self.card_phase,
@@ -306,14 +373,22 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         grid.addWidget(self.card_ttarget_pressure, 4, 1)
         grid.addWidget(QtWidgets.QLabel("Tiempo target vacío"), 5, 0)
         grid.addWidget(self.card_ttarget_vacuum, 5, 1)
-        grid.addWidget(QtWidgets.QLabel("Estado"), 6, 0)
-        grid.addWidget(self.card_apta, 6, 1)
-        grid.addWidget(QtWidgets.QLabel("Score final"), 7, 0)
-        grid.addWidget(self.card_score, 7, 1)
-        grid.addWidget(QtWidgets.QLabel("Fase"), 8, 0)
-        grid.addWidget(self.card_phase, 8, 1)
-        grid.addWidget(QtWidgets.QLabel("Progreso"), 9, 0)
-        grid.addWidget(self.card_progress, 9, 1)
+        grid.addWidget(QtWidgets.QLabel("Overshoot presión"), 6, 0)
+        grid.addWidget(self.card_overshoot_pressure, 6, 1)
+        grid.addWidget(QtWidgets.QLabel("Overshoot vacío"), 7, 0)
+        grid.addWidget(self.card_overshoot_vacuum, 7, 1)
+        grid.addWidget(QtWidgets.QLabel("Settling presión"), 8, 0)
+        grid.addWidget(self.card_settling_pressure, 8, 1)
+        grid.addWidget(QtWidgets.QLabel("Settling vacío"), 9, 0)
+        grid.addWidget(self.card_settling_vacuum, 9, 1)
+        grid.addWidget(QtWidgets.QLabel("Estado"), 10, 0)
+        grid.addWidget(self.card_apta, 10, 1)
+        grid.addWidget(QtWidgets.QLabel("Score final"), 11, 0)
+        grid.addWidget(self.card_score, 11, 1)
+        grid.addWidget(QtWidgets.QLabel("Fase"), 12, 0)
+        grid.addWidget(self.card_phase, 12, 1)
+        grid.addWidget(QtWidgets.QLabel("Progreso"), 13, 0)
+        grid.addWidget(self.card_progress, 13, 1)
 
         return box
 
@@ -343,7 +418,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
         self.label_marker_legend = QtWidgets.QLabel(
             "Líneas verticales: azul=inicio fase, gris=fin fase, "
-            "verde=cruce target, magenta=tope fase."
+            "verde=cruce target, magenta=tope fase, rojo=safety break."
         )
         self.label_marker_legend.setWordWrap(True)
 
@@ -356,7 +431,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         box = QtWidgets.QGroupBox("Histórico (solo APTA, score desc)")
         layout = QtWidgets.QVBoxLayout(box)
 
-        self.history_table = QtWidgets.QTableWidget(0, 9)
+        self.history_table = QtWidgets.QTableWidget(0, 11)
         self.history_table.setHorizontalHeaderLabels(
             [
                 "timestamp",
@@ -366,6 +441,8 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 "topV_mean",
                 "tTargetP_mean",
                 "tTargetV_mean",
+                "overP_mean",
+                "overV_mean",
                 "runs",
                 "summary_csv",
             ]
@@ -438,6 +515,10 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.card_time_top_vacuum.setText("-")
         self.card_ttarget_pressure.setText("-")
         self.card_ttarget_vacuum.setText("-")
+        self.card_overshoot_pressure.setText("-")
+        self.card_overshoot_vacuum.setText("-")
+        self.card_settling_pressure.setText("-")
+        self.card_settling_vacuum.setText("-")
         self.card_apta.setText("-")
         self.card_score.setText("-")
         self.card_phase.setText("-")
@@ -492,6 +573,10 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             f"{self.spin_target_pressure.value():.4f}",
             "--target-vacuum-kpa",
             f"{self.spin_target_vacuum.value():.4f}",
+            "--safety-max-kpa",
+            f"{self.spin_safety_max.value():.4f}",
+            "--safety-min-kpa",
+            f"{self.spin_safety_min.value():.4f}",
             "--pwm-capacity",
             str(self.spin_pwm_capacity.value()),
             "--timeout-phase-s",
@@ -506,10 +591,20 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             f"{self.spin_rest_s.value():.4f}",
             "--filter-window",
             str(self.spin_filter_window.value()),
+            "--settle-band-kpa",
+            f"{self.spin_settle_band_kpa.value():.4f}",
+            "--settle-hold-s",
+            f"{self.spin_settle_hold_s.value():.4f}",
+            "--max-overshoot-pressure-kpa",
+            f"{self.spin_max_overshoot_pressure.value():.4f}",
+            "--max-overshoot-vacuum-kpa",
+            f"{self.spin_max_overshoot_vacuum.value():.4f}",
             "--registry-csv",
             self.input_registry_csv.text().strip(),
         ]
 
+        if not self.cb_require_stability.isChecked():
+            command.append("--no-require-stability")
         if self.cb_demo.isChecked():
             command.append("--demo")
 
@@ -541,6 +636,13 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 "Selecciona al menos una cámara (A, B o C).",
             )
             return
+        if self.spin_safety_min.value() >= self.spin_safety_max.value():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Safety inválido",
+                "Safety -min debe ser menor que Safety +max.",
+            )
+            return
 
         if not os.path.exists(CORE_SCRIPT):
             QtWidgets.QMessageBox.critical(self, "Core missing", f"No existe: {CORE_SCRIPT}")
@@ -556,6 +658,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
         self.process_buffer = ""
         self.last_summary_csv = None
         self.last_raw_csv = None
+        self.safety_break_triggered = False
 
         command = self._build_command()
         self._append_output(" ".join(command))
@@ -870,6 +973,22 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 )
             return
 
+        if event == "safety_break":
+            self.safety_break_triggered = True
+            t = payload.get("t_session_s")
+            if t is not None:
+                self._add_marker(
+                    float(t),
+                    "#E63946",
+                    style=QtCore.Qt.SolidLine,
+                    width=1.8,
+                )
+            self.card_phase.setText("SAFETY_BREAK")
+            self.card_apta.setText("NO_APTA")
+            pressure_txt = self._fmt_num(payload.get("pressure_filtered_kpa"), " kPa")
+            self.label_run_status.setText(f"Estado: SAFETY_BREAK ({pressure_txt})")
+            return
+
         if event == "phase_end":
             end_t = payload.get("end_session_s")
             if end_t is not None:
@@ -904,6 +1023,18 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.card_ttarget_vacuum.setText(
                 self._fmt_num(payload.get("time_to_target_vacuum_s"), " s")
             )
+            self.card_overshoot_pressure.setText(
+                self._fmt_num(payload.get("overshoot_pressure_kpa"), " kPa")
+            )
+            self.card_overshoot_vacuum.setText(
+                self._fmt_num(payload.get("overshoot_vacuum_kpa"), " kPa")
+            )
+            self.card_settling_pressure.setText(
+                self._fmt_num(payload.get("settling_pressure_s"), " s")
+            )
+            self.card_settling_vacuum.setText(
+                self._fmt_num(payload.get("settling_vacuum_s"), " s")
+            )
             valid = bool(payload.get("valid", False))
             self.card_apta.setText("APTA" if valid else "NO_APTA")
             return
@@ -927,6 +1058,18 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.card_ttarget_vacuum.setText(
                 self._fmt_num(payload.get("time_to_target_vacuum_mean_s"), " s")
             )
+            self.card_overshoot_pressure.setText(
+                self._fmt_num(payload.get("overshoot_pressure_mean_kpa"), " kPa")
+            )
+            self.card_overshoot_vacuum.setText(
+                self._fmt_num(payload.get("overshoot_vacuum_mean_kpa"), " kPa")
+            )
+            self.card_settling_pressure.setText(
+                self._fmt_num(payload.get("settling_pressure_mean_s"), " s")
+            )
+            self.card_settling_vacuum.setText(
+                self._fmt_num(payload.get("settling_vacuum_mean_s"), " s")
+            )
             self.last_summary_csv = self._to_abs_path(payload.get("summary_csv"))
             self.last_raw_csv = self._to_abs_path(payload.get("raw_csv"))
             self.btn_export.setEnabled(bool(self.last_summary_csv or self.last_raw_csv))
@@ -934,13 +1077,20 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
 
         if event == "error":
             message = payload.get("message", "unknown")
+            if payload.get("kind") == "safety_break":
+                self.safety_break_triggered = True
+                self.card_phase.setText("SAFETY_BREAK")
+                self.card_apta.setText("NO_APTA")
             self.label_run_status.setText(f"Estado: error ({message})")
             return
 
     def _on_process_finished(self, exit_code: int, _exit_status: Any) -> None:
         self._on_process_output()
         self._set_running(False)
-        status = "OK" if exit_code == 0 else f"ERROR ({exit_code})"
+        if self.safety_break_triggered:
+            status = "SAFETY_BREAK"
+        else:
+            status = "OK" if exit_code == 0 else f"ERROR ({exit_code})"
         self.label_run_status.setText(f"Estado: finalizado {status}")
         self.process = None
         self.refresh_history()
@@ -987,6 +1137,8 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
                 row.get("top_vacuum_mean_kpa", ""),
                 row.get("time_to_target_pressure_mean_s", ""),
                 row.get("time_to_target_vacuum_mean_s", ""),
+                row.get("overshoot_pressure_mean_kpa", ""),
+                row.get("overshoot_vacuum_mean_kpa", ""),
                 row.get("runs", ""),
                 row.get("summary_csv", ""),
             ]
