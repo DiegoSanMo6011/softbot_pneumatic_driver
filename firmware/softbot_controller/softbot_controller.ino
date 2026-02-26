@@ -103,8 +103,6 @@ const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
 };
 
 const int THRESHOLD_AUX_ENABLE = 40;
-const float SUCTION_RELEASE_ON_ERROR_KPA = 0.2f;
-const float SUCTION_RELEASE_OFF_ERROR_KPA = -1.0f;
 
 const int PIN_I2C_SDA = 21;
 const int PIN_I2C_SCL = 22;
@@ -132,7 +130,6 @@ int8_t control_mode = 0;
 int8_t active_chamber = 0;
 
 bool emergency_stop_active = false;
-bool suction_release_active = false;
 unsigned long last_control_timestamp = 0;
 
 Adafruit_ADS1115 ads;
@@ -170,6 +167,7 @@ int16_t debug_data[4];
 float tuning_buffer[6];
 
 void fatal_error_loop(int code) {
+  stopActuators();
   while (1) {
     for (int i = 0; i < code; i++) {
       digitalWrite(PIN_LED_STATUS, HIGH);
@@ -206,8 +204,8 @@ void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode);
 // ==========================================
 // FUNCIONES
 // ==========================================
-float readPressureSensor() {
-  int16_t adc = ads.readADC_SingleEnded(0);
+float readPressureChannel(uint8_t channel) {
+  int16_t adc = ads.readADC_SingleEnded(channel);
   float volts = ads.computeVolts(adc);
   return (volts - V_OFFSET) / V_SENSITIVITY;
 }
@@ -379,7 +377,6 @@ void cb_mode(const void *msgin) {
   if (mode_changed) {
     integral_pos_sum = 0;
     integral_neg_sum = 0;
-    suction_release_active = false;
   }
 
   if (mode_changed && control_mode == MODE_HARDWARE_DIAGNOSTIC) {
@@ -416,10 +413,16 @@ void cb_hwtest(const void *msgin) {
 // LOOP DE CONTROL
 // ==========================================
 void controlLoop() {
-  current_pressure = readPressureSensor();
-
-  if (current_pressure > safety_limit_max || current_pressure < safety_limit_min) {
-    triggerEmergencyStop();
+  if (control_mode == MODE_PID_SUCTION || control_mode == MODE_PWM_SUCTION) {
+    current_pressure = readPressureChannel(1);
+    if (current_pressure < safety_limit_min || current_pressure > safety_limit_max) {
+      triggerEmergencyStop();
+    }
+  } else {
+    current_pressure = readPressureChannel(0);
+    if (current_pressure > safety_limit_max || current_pressure < safety_limit_min) {
+      triggerEmergencyStop();
+    }
   }
 
   msg_feedback.data = current_pressure;
@@ -472,9 +475,7 @@ void controlLoop() {
     stopActuators();
     integral_pos_sum = 0;
     integral_neg_sum = 0;
-    suction_release_active = false;
   } else if (control_mode == MODE_PID_INFLATE) { // INFLAR PI PURO
-    suction_release_active = false;
     digitalWrite(PIN_VALVE_INFLATE, HIGH);
     digitalWrite(PIN_VALVE_SUCTION, LOW);
     ledcWrite(CH_SUCCION_MAIN, 0);
@@ -483,31 +484,14 @@ void controlLoop() {
     ledcWrite(CH_INFLATE_MAIN, pwm_main);
     ledcWrite(CH_INFLATE_AUX, pwm_aux);
   } else if (control_mode == MODE_PID_SUCTION) { // SUCCIONAR PI PURO
-    if (error >= SUCTION_RELEASE_ON_ERROR_KPA) {
-      suction_release_active = true;
-    } else if (error <= SUCTION_RELEASE_OFF_ERROR_KPA) {
-      suction_release_active = false;
-    }
-
     ledcWrite(CH_INFLATE_MAIN, 0);
     ledcWrite(CH_INFLATE_AUX, 0);
 
-    if (suction_release_active) {
-      // Chamber is already below target vacuum: open vent path and avoid accumulating suction integral.
-      integral_neg_sum = 0.0f;
-      pwm_main = 0;
-      pwm_aux = 0;
-      digitalWrite(PIN_VALVE_INFLATE, LOW);
-      digitalWrite(PIN_VALVE_SUCTION, LOW);
-      ledcWrite(CH_SUCCION_MAIN, 0);
-      ledcWrite(CH_SUCCION_AUX, 0);
-    } else {
-      digitalWrite(PIN_VALVE_INFLATE, LOW);
-      digitalWrite(PIN_VALVE_SUCTION, HIGH);
-      applySuctionControl(error, &pwm_main, &pwm_aux);
-      ledcWrite(CH_SUCCION_MAIN, pwm_main);
-      ledcWrite(CH_SUCCION_AUX, pwm_aux);
-    }
+    digitalWrite(PIN_VALVE_INFLATE, LOW);
+    digitalWrite(PIN_VALVE_SUCTION, HIGH);
+    applySuctionControl(error, &pwm_main, &pwm_aux);
+    ledcWrite(CH_SUCCION_MAIN, pwm_main);
+    ledcWrite(CH_SUCCION_AUX, pwm_aux);
   }
   // MODOS MANUALES
   else if (control_mode == MODE_PWM_INFLATE || control_mode == MODE_PWM_SUCTION) {
@@ -555,6 +539,7 @@ void setup() {
   if (!ads.begin()) { /* Error */
   }
   ads.setGain(GAIN_ONE);
+  ads.setDataRate(RATE_ADS1115_860SPS); // Max speed to prevent I2C blocks from starving ROS
 
   const size_t digital_count = sizeof(DIAG_DIGITAL_OUTPUTS) / sizeof(DIAG_DIGITAL_OUTPUTS[0]);
   for (size_t idx = 0; idx < digital_count; idx++) {
@@ -601,6 +586,12 @@ void setup() {
   msg_tuning.data.capacity = 6;
   msg_tuning.data.size = 6;
   msg_tuning.data.data = tuning_buffer;
+
+  // 6. Initialize message buffers to safe values
+  msg_mode.data = 0;
+  msg_setpoint.data = 0.0f;
+  msg_chamber.data = 0;
+  msg_hwtest.data = 0;
 
   RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_setpoint, &msg_setpoint, &cb_setpoint,
