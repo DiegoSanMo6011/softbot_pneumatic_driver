@@ -440,17 +440,23 @@ void controlLoop() {
   }
 
   if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    // In diagnostic mode, read BOTH sensors so the GUI can display them
+    current_pressure = readPressureChannel(0);
+    float vacuum_pressure = readPressureChannel(1);
+
+    msg_feedback.data = current_pressure;
+    RCSOFTCHECK(rcl_publish(&pub_feedback, &msg_feedback, NULL));
+
     int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
     int16_t active_main = 0;
     int16_t active_aux = 0;
     applyHardwareDiagnosticOutputs(hardware_test_mask, pwm_diag, &active_main, &active_aux);
     debug_data[0] = active_main;
     debug_data[1] = active_aux;
-    debug_data[2] = 0;
+    debug_data[2] = (int16_t)(vacuum_pressure * 10.0f); // Ch1 vacuum kPa × 10
     debug_data[3] = (int16_t)control_mode;
     msg_debug.data.data = debug_data;
     msg_debug.data.size = 4;
-    RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
     RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
     return;
   }

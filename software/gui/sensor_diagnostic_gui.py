@@ -411,22 +411,27 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
         pressure = state.get("pressure", 0.0)
         pwm_main = state.get("pwm_main", 0)
         pwm_aux = state.get("pwm_aux", 0)
-        error = state.get("error", 0.0)
+        error_raw = state.get("error_raw", 0)
         mode = state.get("logic_state", 0)
 
-        # The firmware only publishes the ACTIVE sensor on pressure_feedback.
-        # Mode 9 = hardware diagnostic, modes -1/-2 = suction, modes 1/2 = inflate
-        if mode == 9 or mode in (1, 2, 0, 4):
+        if mode == 9:
+            # Hardware diagnostic: firmware sends Ch0 on feedback, Ch1 on debug[2] as kPa×10
+            self.gauge_pos.update_value(pressure)
+            vacuum_kpa = error_raw / 10.0  # debug_data[2] = vacuum × 10
+            self.gauge_neg.update_value(vacuum_kpa)
+            self.status_label.setText(
+                f"Ch0: {pressure:+.2f} kPa  |  Ch1: {vacuum_kpa:+.2f} kPa  |  "
+                f"Mode: 9 (DIAG)  |  PWM: {pwm_main}/{pwm_aux}"
+            )
+        elif mode in (1, 2, 0, 4):
             self.gauge_pos.update_value(pressure)
             self.status_label.setText(
-                f"Feedback activo => {pressure:+.2f} kPa  |  "
-                f"Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
+                f"Ch0: {pressure:+.2f} kPa  |  Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
             )
         elif mode in (-1, -2):
             self.gauge_neg.update_value(pressure)
             self.status_label.setText(
-                f"Feedback activo => {pressure:+.2f} kPa  |  "
-                f"Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
+                f"Ch1: {pressure:+.2f} kPa  |  Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
             )
         else:
             self.status_label.setText(
@@ -435,7 +440,7 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
 
         self.lbl_pwm_main.setText(f"PWM Main: {pwm_main}")
         self.lbl_pwm_aux.setText(f"PWM Aux: {pwm_aux}")
-        self.lbl_error.setText(f"Error: {error:+.2f}")
+        self.lbl_error.setText(f"Error: {error_raw}")
         self.lbl_mode.setText(f"Mode: {mode}")
 
     # ── Cleanup ──────────────────────────────────────────────────────
