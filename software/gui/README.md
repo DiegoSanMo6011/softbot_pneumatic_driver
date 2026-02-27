@@ -65,6 +65,20 @@ Incluye:
 - Importación/exportación JSON para compartir secuencias entre equipos.
 - Panel de tuning para mantener PID embebido en firmware y ajustar ganancias sin salir de la GUI.
 
+## 5) GUI de diagnóstico de sensores y fugas
+Script:
+```text
+software/gui/sensor_diagnostic_gui.py
+```
+
+Incluye:
+- Gauges en vivo de ambos canales del ADS1115 (Ch0 presión, Ch1 vacío).
+- Botones toggle individuales para cada bomba, válvula y MUX (modo diagnóstico 9).
+- Control de PWM configurable (0–255).
+- Registro Min/Max con reset para medir caídas de presión (detección de fugas).
+- Botón de emergencia TODO OFF.
+- Telemetría debug (PWM Main/Aux, Error, Mode, Mask).
+
 ## Dependencias
 - `pyqtgraph` (para `softbot_gui.py` y `pump_eval_gui.py`)
 - `PySide6` (o `PyQt5` como fallback)
@@ -77,6 +91,7 @@ python3 software/gui/softbot_gui.py
 python3 software/gui/hardware_mosfet_gui.py
 python3 software/gui/pump_eval_gui.py
 python3 software/gui/locomotion_gui.py
+python3 software/gui/sensor_diagnostic_gui.py
 ```
 
 También disponible por CLI:
@@ -84,6 +99,8 @@ También disponible por CLI:
 ./scripts/labctl gui start --foreground
 ./scripts/labctl gui pump-eval --foreground
 ./scripts/labctl gui locomotion --foreground
+./scripts/labctl gui sensor-diag --foreground
 ./scripts/labctl hardware gui --foreground
 ./scripts/labctl benchmark pumps --pump-label actuales --chamber 7 --target-kpa 35 --runs 5
 ```
+
