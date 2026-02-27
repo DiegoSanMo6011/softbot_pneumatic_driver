@@ -24,6 +24,7 @@ GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "softbot_gui.py"
 HARDWARE_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "hardware_mosfet_gui.py"
 PUMP_EVAL_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "pump_eval_gui.py"
 LOCOMOTION_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "locomotion_gui.py"
+SENSOR_DIAG_GUI_SCRIPT = REPO_ROOT / "software" / "gui" / "sensor_diagnostic_gui.py"
 SMOKE_SCRIPT = REPO_ROOT / "software" / "tools" / "smoke_lab.py"
 HARDWARE_TEST_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_component_tester.py"
 HARDWARE_RUNTIME_CHECK_SCRIPT = REPO_ROOT / "software" / "tools" / "hardware_runtime_check.py"
@@ -557,6 +558,25 @@ def cmd_gui_locomotion(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui_sensor_diag(args: argparse.Namespace) -> int:
+    if not SENSOR_DIAG_GUI_SCRIPT.exists():
+        raise LabCtlError(f"Sensor diagnostic GUI script missing: {SENSOR_DIAG_GUI_SCRIPT}")
+
+    python_bin = resolve_repo_python()
+    command = [python_bin, str(SENSOR_DIAG_GUI_SCRIPT)]
+    if args.foreground:
+        event("gui sensor-diag foreground")
+        run_command(ros_wrapped(command))
+        return 0
+
+    start_background(name="gui_sensor_diag", parts=command, use_ros=True)
+    print(
+        "Sensor diagnostic GUI started in background. If no window appears, "
+        "run: ./scripts/labctl gui sensor-diag --foreground"
+    )
+    return 0
+
+
 def cmd_example_run(args: argparse.Namespace) -> int:
     example = resolve_example(args.name)
     python_bin = resolve_repo_python()
@@ -952,6 +972,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gui_locomotion.add_argument("--foreground", action="store_true", help="Run attached to terminal")
     gui_locomotion.set_defaults(func=cmd_gui_locomotion)
+
+    gui_sensor_diag = gui_sub.add_parser(
+        "sensor-diag",
+        help="Start dual-sensor diagnostic GUI for leak detection",
+    )
+    gui_sensor_diag.add_argument("--foreground", action="store_true", help="Run attached to terminal")
+    gui_sensor_diag.set_defaults(func=cmd_gui_sensor_diag)
 
     example = sub.add_parser("example", help="Run example scripts")
     example_sub = example.add_subparsers(dest="example_cmd", required=True)
