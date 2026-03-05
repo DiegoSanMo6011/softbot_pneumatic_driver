@@ -118,7 +118,8 @@ float Ki_pos = 1500.0f;
 
 const float TS_SECONDS = 0.020f;
 const int TS_MS = 20;
-const int TELEMETRY_PERIOD_MS = 100;
+// Lower telemetry publish rate to improve stability in noisy sensor setups.
+const int TELEMETRY_PERIOD_MS = 200;
 
 float integral_pos_sum = 0.0f;
 float integral_neg_sum = 0.0f;
