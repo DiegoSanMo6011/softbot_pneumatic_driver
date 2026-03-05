@@ -18,7 +18,6 @@ except Exception:
     from PyQt5 import QtCore, QtGui, QtWidgets
 
 import rclpy
-from std_msgs.msg import Float32, Int16MultiArray
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SOFTWARE_DIR = os.path.join(BASE_DIR, "software")
@@ -313,12 +312,12 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
 
         self.lbl_pwm_main = QtWidgets.QLabel("PWM Main: —")
         self.lbl_pwm_aux = QtWidgets.QLabel("PWM Aux: —")
-        self.lbl_error = QtWidgets.QLabel("Error: —")
+        self.lbl_flags = QtWidgets.QLabel("Flags: —")
         self.lbl_mode = QtWidgets.QLabel("Mode: —")
         self.lbl_mask = QtWidgets.QLabel("Mask: 0")
         self.lbl_mask.setStyleSheet("font-family: monospace;")
 
-        for lbl in (self.lbl_pwm_main, self.lbl_pwm_aux, self.lbl_error, self.lbl_mode, self.lbl_mask):
+        for lbl in (self.lbl_pwm_main, self.lbl_pwm_aux, self.lbl_flags, self.lbl_mode, self.lbl_mask):
             lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px; font-family: monospace;")
             debug_layout.addWidget(lbl)
 
@@ -408,39 +407,24 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
         except Exception:
             return
 
-        pressure = state.get("pressure", 0.0)
+        pressure_ch0 = state.get("sensor_pressure_kpa", 0.0)
+        vacuum_ch1 = state.get("sensor_vacuum_kpa", 0.0)
+        control_pressure = state.get("control_pressure_kpa", 0.0)
         pwm_main = state.get("pwm_main", 0)
         pwm_aux = state.get("pwm_aux", 0)
-        error_raw = state.get("error_raw", 0)
         mode = state.get("logic_state", 0)
+        status_flags = int(state.get("status_flags", 0))
 
-        if mode == 9:
-            # Hardware diagnostic: firmware sends Ch0 on feedback, Ch1 on debug[2] as kPa×10
-            self.gauge_pos.update_value(pressure)
-            vacuum_kpa = error_raw / 10.0  # debug_data[2] = vacuum × 10
-            self.gauge_neg.update_value(vacuum_kpa)
-            self.status_label.setText(
-                f"Ch0: {pressure:+.2f} kPa  |  Ch1: {vacuum_kpa:+.2f} kPa  |  "
-                f"Mode: 9 (DIAG)  |  PWM: {pwm_main}/{pwm_aux}"
-            )
-        elif mode in (1, 2, 0, 4):
-            self.gauge_pos.update_value(pressure)
-            self.status_label.setText(
-                f"Ch0: {pressure:+.2f} kPa  |  Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
-            )
-        elif mode in (-1, -2):
-            self.gauge_neg.update_value(pressure)
-            self.status_label.setText(
-                f"Ch1: {pressure:+.2f} kPa  |  Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
-            )
-        else:
-            self.status_label.setText(
-                f"Pressure: {pressure:+.2f} kPa  |  Mode: {mode}"
-            )
+        self.gauge_pos.update_value(pressure_ch0)
+        self.gauge_neg.update_value(vacuum_ch1)
+        self.status_label.setText(
+            f"Ch0: {pressure_ch0:+.2f} kPa  |  Ch1: {vacuum_ch1:+.2f} kPa  |  "
+            f"Ctl: {control_pressure:+.2f} kPa  |  Mode: {mode}  |  PWM: {pwm_main}/{pwm_aux}"
+        )
 
         self.lbl_pwm_main.setText(f"PWM Main: {pwm_main}")
         self.lbl_pwm_aux.setText(f"PWM Aux: {pwm_aux}")
-        self.lbl_error.setText(f"Error: {error_raw}")
+        self.lbl_flags.setText(f"Flags: 0x{status_flags:02X}")
         self.lbl_mode.setText(f"Mode: {mode}")
 
     # ── Cleanup ──────────────────────────────────────────────────────

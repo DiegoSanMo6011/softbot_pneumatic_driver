@@ -577,7 +577,7 @@ class SequenceEngine:
     def tick(self) -> EngineSnapshot:
         try:
             state = self.bot.get_state()
-            self.snapshot.pressure_kpa = float(state.get("pressure", 0.0))
+            self.snapshot.pressure_kpa = float(state.get("control_pressure_kpa", 0.0))
         except Exception as exc:
             self.log(f"Telemetry warning: {exc}")
 

@@ -49,7 +49,7 @@ def print_status(bot: SoftBot, c_on: bool, chamber_mask: int):
     state = bot.get_state()
     sys.stdout.write(
         f"\r\033[KC={'ON' if c_on else 'OFF'} | "
-        f"Mask={chamber_mask} | P={state['pressure']:.2f} kPa | PWM={state['pwm_main']}"
+        f"Mask={chamber_mask} | P={state['control_pressure_kpa']:.2f} kPa | PWM={state['pwm_main']}"
     )
     sys.stdout.flush()
 

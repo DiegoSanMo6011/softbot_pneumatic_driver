@@ -13,7 +13,8 @@ from std_msgs.msg import Int16MultiArray
 EXPECTED_FIRMWARE_NODE = "soft_robot_node"
 
 EXPECTED_TELEMETRY_TOPICS = {
-    "/pressure_feedback": "std_msgs/msg/Float32",
+    "/sensor/pressure": "std_msgs/msg/Float32",
+    "/sensor/vacuum": "std_msgs/msg/Float32",
     "/system_debug": "std_msgs/msg/Int16MultiArray",
 }
 
@@ -119,6 +120,21 @@ def wait_for_system_debug_sample(node: Node, timeout_s: float) -> tuple[bool, li
         node.destroy_subscription(subscription)
 
 
+def system_debug_schema_ok(sample: list[int]) -> tuple[bool, str]:
+    if len(sample) != 6:
+        return False, f"expected 6 items, got {len(sample)}"
+    pwm_main, pwm_aux, _ch0_x10, _ch1_x10, mode, flags = sample
+    if pwm_main < -1 or pwm_main > 255:
+        return False, f"pwm_main fuera de rango: {pwm_main}"
+    if pwm_aux < -1 or pwm_aux > 255:
+        return False, f"pwm_aux fuera de rango: {pwm_aux}"
+    if mode not in (-2, -1, 0, 1, 2, 4, 9):
+        return False, f"mode inesperado: {mode}"
+    if flags < 0 or flags > 1024:
+        return False, f"flags fuera de rango: {flags}"
+    return True, "ok"
+
+
 def print_missing(missing: dict[str, list[str]]) -> None:
     for key, items in missing.items():
         if items:
@@ -157,7 +173,14 @@ def main() -> int:
             )
             return 1
 
+        schema_ok, schema_msg = system_debug_schema_ok(sample)
+        if not schema_ok:
+            print(f"[FAIL] /system_debug schema: {schema_msg}")
+            print(f"[info] payload recibido: {sample}")
+            return 1
+
         print(f"[OK] /system_debug sample: {sample}")
+        print("[OK] /system_debug schema: [pwm_main,pwm_aux,ch0_x10,ch1_x10,mode,flags]")
         return 0
     finally:
         node.destroy_node()

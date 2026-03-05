@@ -166,7 +166,10 @@ def monitor_loop(bot, duration_sec, scene_name=""):
         recorder.set_label(scene_name)
     for i in range(duration_sec):
         state = bot.get_state()
-        print(f"    T={i + 1}s | P: {state['pressure']:.2f} kPa | PWM: {state['pwm_main']}")
+        print(
+            f"    T={i + 1}s | P: {state['control_pressure_kpa']:.2f} kPa | "
+            f"PWM: {state['pwm_main']}"
+        )
         time.sleep(1)
 
 

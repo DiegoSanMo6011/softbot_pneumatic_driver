@@ -80,7 +80,8 @@ class SoftBotNode(Node):
         self.topic_setpoint = "/pressure_setpoint"
         self.topic_tuning = "/tuning_params"
         self.topic_hwtest = "/hardware_test"
-        self.topic_feedback = "/pressure_feedback"
+        self.topic_sensor_pressure = "/sensor/pressure"
+        self.topic_sensor_vacuum = "/sensor/vacuum"
         self.topic_debug = "/system_debug"
 
         # --- Publicadores ---
@@ -95,10 +96,16 @@ class SoftBotNode(Node):
         self.pub_hwtest = self.create_publisher(Int16, self.topic_hwtest, 10)
 
         # --- Suscriptores ---
-        self.sub_feedback = self.create_subscription(
+        self.sub_sensor_pressure = self.create_subscription(
             Float32,
-            self.topic_feedback,
-            self._cb_feedback,
+            self.topic_sensor_pressure,
+            self._cb_sensor_pressure,
+            10,
+        )
+        self.sub_sensor_vacuum = self.create_subscription(
+            Float32,
+            self.topic_sensor_vacuum,
+            self._cb_sensor_vacuum,
             10,
         )
         self.sub_debug = self.create_subscription(
@@ -127,32 +134,49 @@ class SoftBotNode(Node):
         )
 
         # --- Estado ---
-        self.pressure_kpa = 0.0
+        self.sensor_pressure_kpa = 0.0
+        self.sensor_vacuum_kpa = 0.0
+        self.control_pressure_kpa = 0.0
         self.setpoint = 0.0
         self.mode = 0
         self.chamber = 0
         self.pwm_main = 0
         self.pwm_aux = 0
-        self.error_raw = 0
+        self.status_flags = 0
 
-    def _cb_feedback(self, msg: Float32):
-        self.pressure_kpa = float(msg.data)
+    def _refresh_control_pressure(self):
+        if self.mode in (MODE_PID_SUCTION, MODE_PWM_SUCTION):
+            self.control_pressure_kpa = float(self.sensor_vacuum_kpa)
+        else:
+            self.control_pressure_kpa = float(self.sensor_pressure_kpa)
+
+    def _cb_sensor_pressure(self, msg: Float32):
+        self.sensor_pressure_kpa = float(msg.data)
+        self._refresh_control_pressure()
+
+    def _cb_sensor_vacuum(self, msg: Float32):
+        self.sensor_vacuum_kpa = float(msg.data)
+        self._refresh_control_pressure()
 
     def _cb_setpoint(self, msg: Float32):
         self.setpoint = float(msg.data)
 
     def _cb_mode(self, msg: Int8):
         self.mode = int(msg.data)
+        self._refresh_control_pressure()
 
     def _cb_chamber(self, msg: Int8):
         self.chamber = int(msg.data)
 
     def _cb_debug(self, msg: Int16MultiArray):
-        if len(msg.data) >= 4:
+        if len(msg.data) >= 6:
             self.pwm_main = int(msg.data[0])
             self.pwm_aux = int(msg.data[1])
-            self.error_raw = int(msg.data[2])
-            self.mode = int(msg.data[3])
+            self.sensor_pressure_kpa = float(msg.data[2]) / 10.0
+            self.sensor_vacuum_kpa = float(msg.data[3]) / 10.0
+            self.mode = int(msg.data[4])
+            self.status_flags = int(msg.data[5])
+            self._refresh_control_pressure()
 
     @staticmethod
     def _valid_chamber(chamber: int) -> bool:
@@ -524,12 +548,17 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         rclpy.spin_once(self.node, timeout_sec=0)
 
         now = time.time() - self.start_time
+        if self.node.mode in (MODE_PID_INFLATE, MODE_PID_SUCTION):
+            error_kpa = self.node.setpoint - self.node.control_pressure_kpa
+        else:
+            error_kpa = 0.0
+
         self.t.append(now)
-        self.pressure.append(self.node.pressure_kpa)
+        self.pressure.append(self.node.control_pressure_kpa)
         self.setpoint.append(self.node.setpoint)
         self.pwm_main.append(self.node.pwm_main)
         self.pwm_aux.append(self.node.pwm_aux)
-        self.error.append(self.node.error_raw / 10.0)
+        self.error.append(error_kpa)
 
         self.curve_pressure.setData(self.t, self.pressure)
         self.curve_setpoint.setData(self.t, self.setpoint)
@@ -541,11 +570,14 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         chamber_txt = self._chamber_mask_label(chamber_mask)
 
         self.label_status.setText(
-            f"P={self.node.pressure_kpa:.2f} kPa | "
+            f"Ctl={self.node.control_pressure_kpa:.2f} kPa | "
+            f"Ch0={self.node.sensor_pressure_kpa:.2f} | "
+            f"Ch1={self.node.sensor_vacuum_kpa:.2f} | "
             f"SP={self.node.setpoint:.2f} | "
             f"PWM=({self.node.pwm_main},{self.node.pwm_aux}) | "
             f"Mode={self.node.mode} ({mode_txt}) | "
-            f"Err={self.node.error_raw / 10.0:.2f} | "
+            f"Err={error_kpa:.2f} | "
+            f"Flags=0x{self.node.status_flags:02X} | "
             f"ChMask={chamber_mask} ({chamber_txt})"
         )
 
@@ -554,11 +586,14 @@ class SoftBotGUI(QtWidgets.QMainWindow):
                 [
                     f"{now:.4f}",
                     f"{self.node.setpoint:.4f}",
-                    f"{self.node.pressure_kpa:.4f}",
+                    f"{self.node.control_pressure_kpa:.4f}",
+                    f"{self.node.sensor_pressure_kpa:.4f}",
+                    f"{self.node.sensor_vacuum_kpa:.4f}",
                     self.node.pwm_main,
                     self.node.pwm_aux,
                     self.node.mode,
-                    f"{self.node.error_raw / 10.0:.4f}",
+                    f"{error_kpa:.4f}",
+                    self.node.status_flags,
                 ]
             )
 
@@ -794,11 +829,14 @@ class SoftBotGUI(QtWidgets.QMainWindow):
                 [
                     "Timestamp_s",
                     "Setpoint",
-                    "Feedback_kPa",
+                    "Control_kPa",
+                    "SensorPressureCh0_kPa",
+                    "SensorVacuumCh1_kPa",
                     "PWM_Main",
                     "PWM_Aux",
                     "Mode",
                     "Error_kPa",
+                    "StatusFlags",
                 ]
             )
             self.btn_log.setText("Detener log")

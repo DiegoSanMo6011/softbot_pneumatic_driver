@@ -76,7 +76,7 @@ def main():
                         [
                             f"{t_curr:.3f}",
                             target_now,
-                            f"{state['pressure']:.2f}",
+                            f"{state['control_pressure_kpa']:.2f}",
                             state["pwm_main"],
                             state["pwm_aux"],
                         ]
@@ -97,7 +97,7 @@ def main():
                         [
                             f"{t_curr:.3f}",
                             target_now,
-                            f"{state['pressure']:.2f}",
+                            f"{state['control_pressure_kpa']:.2f}",
                             state["pwm_main"],
                             state["pwm_aux"],
                         ]

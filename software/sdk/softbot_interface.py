@@ -54,7 +54,8 @@ class SoftBot(Node):
         self.TOPIC_SETPOINT = "/pressure_setpoint"
         self.TOPIC_TUNING = "/tuning_params"
         self.TOPIC_HARDWARE_TEST = "/hardware_test"
-        self.TOPIC_FEEDBACK = "/pressure_feedback"
+        self.TOPIC_SENSOR_PRESSURE = "/sensor/pressure"
+        self.TOPIC_SENSOR_VACUUM = "/sensor/vacuum"
         self.TOPIC_DEBUG = "/system_debug"
 
         # Publishers
@@ -65,10 +66,16 @@ class SoftBot(Node):
         self.pub_hwtest = self.create_publisher(Int16, self.TOPIC_HARDWARE_TEST, 10)
 
         # Subscribers
-        self.sub_feedback = self.create_subscription(
+        self.sub_sensor_pressure = self.create_subscription(
             Float32,
-            self.TOPIC_FEEDBACK,
-            self._cb_feedback,
+            self.TOPIC_SENSOR_PRESSURE,
+            self._cb_sensor_pressure,
+            10,
+        )
+        self.sub_sensor_vacuum = self.create_subscription(
+            Float32,
+            self.TOPIC_SENSOR_VACUUM,
+            self._cb_sensor_vacuum,
             10,
         )
         self.sub_debug = self.create_subscription(
@@ -79,8 +86,9 @@ class SoftBot(Node):
         )
 
         # Telemetry state
-        self.pressure_kpa = 0.0
-        self.debug_vector = [0, 0, 0, 0]
+        self.sensor_pressure_kpa = 0.0
+        self.sensor_vacuum_kpa = 0.0
+        self.debug_vector = [0, 0, 0, 0, 0, 0]
         self._telemetry_lock = threading.Lock()
 
         # Matches firmware defaults (softbot_controller.ino).
@@ -105,13 +113,17 @@ class SoftBot(Node):
         while not self._stop_event.is_set() and rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.1)
 
-    def _cb_feedback(self, msg):
+    def _cb_sensor_pressure(self, msg):
         with self._telemetry_lock:
-            self.pressure_kpa = msg.data
+            self.sensor_pressure_kpa = msg.data
+
+    def _cb_sensor_vacuum(self, msg):
+        with self._telemetry_lock:
+            self.sensor_vacuum_kpa = msg.data
 
     def _cb_debug(self, msg):
         with self._telemetry_lock:
-            if len(msg.data) >= 4:
+            if len(msg.data) >= 6:
                 self.debug_vector = list(msg.data)
 
     def _publish_with_retries(
@@ -335,15 +347,22 @@ class SoftBot(Node):
     def get_state(self):
         """Return current telemetry snapshot."""
         with self._telemetry_lock:
-            error_raw = self.debug_vector[2]
+            logic_state = int(self.debug_vector[4])
+            status_flags = int(self.debug_vector[5])
+            control_pressure = (
+                float(self.sensor_vacuum_kpa)
+                if logic_state in (MODE_PID_SUCTION, MODE_PWM_SUCTION)
+                else float(self.sensor_pressure_kpa)
+            )
             return {
                 "timestamp": time.time(),
-                "pressure": self.pressure_kpa,
-                "pwm_main": self.debug_vector[0],
-                "pwm_aux": self.debug_vector[1],
-                "logic_state": self.debug_vector[3],
-                "error_raw": error_raw,
-                "error": error_raw / 10.0,
+                "sensor_pressure_kpa": float(self.sensor_pressure_kpa),
+                "sensor_vacuum_kpa": float(self.sensor_vacuum_kpa),
+                "control_pressure_kpa": control_pressure,
+                "pwm_main": int(self.debug_vector[0]),
+                "pwm_aux": int(self.debug_vector[1]),
+                "logic_state": logic_state,
+                "status_flags": status_flags,
             }
 
     def close(self):

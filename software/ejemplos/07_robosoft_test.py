@@ -99,11 +99,10 @@ class AutoSingleMoveSequencer:
         self.last_print = now
 
         state = self.bot.get_state()
-        p = state.get("pressure", None)
+        p = state.get("control_pressure_kpa", None)
 
         if p is None:
-            # Si tu state trae otro nombre, cámbialo aquí
-            sys.stdout.write("\r\033[K📟 Estado: sin 'pressure' en get_state()")
+            sys.stdout.write("\r\033[K📟 Estado: sin 'control_pressure_kpa' en get_state()")
             sys.stdout.flush()
             return
 

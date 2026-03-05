@@ -23,7 +23,13 @@ SOFTWARE_ROOT = os.path.join(REPO_ROOT, "software")
 if SOFTWARE_ROOT not in sys.path:
     sys.path.append(SOFTWARE_ROOT)
 
-from sdk.protocol import CHAMBER_ABC, MODE_PWM_INFLATE, MODE_PWM_SUCTION  # noqa: E402
+from sdk.protocol import (  # noqa: E402
+    CHAMBER_ABC,
+    MODE_PID_INFLATE,
+    MODE_PID_SUCTION,
+    MODE_PWM_INFLATE,
+    MODE_PWM_SUCTION,
+)
 
 EVENT_PREFIX = "[pump_eval_event]"
 PHASE_CAP_PRESSURE = "cap_pressure"
@@ -328,11 +334,26 @@ class DemoPump:
 
     def get_state(self) -> dict[str, float | int]:
         self._step()
+        if self.mode in (PHASE_CAP_VACUUM, PHASE_TARGET_VACUUM):
+            sensor_pressure = 0.0
+            sensor_vacuum = float(self.pressure)
+            logic_state = MODE_PID_SUCTION if self.mode == PHASE_TARGET_VACUUM else MODE_PWM_SUCTION
+        elif self.mode in (PHASE_CAP_PRESSURE, PHASE_TARGET_PRESSURE):
+            sensor_pressure = float(self.pressure)
+            sensor_vacuum = 0.0
+            logic_state = MODE_PID_INFLATE if self.mode == PHASE_TARGET_PRESSURE else MODE_PWM_INFLATE
+        else:
+            sensor_pressure = float(self.pressure)
+            sensor_vacuum = 0.0
+            logic_state = 0
         return {
-            "pressure": float(self.pressure),
+            "sensor_pressure_kpa": sensor_pressure,
+            "sensor_vacuum_kpa": sensor_vacuum,
+            "control_pressure_kpa": float(self.pressure),
             "pwm_main": int(self.pwm),
             "pwm_aux": int(self.pwm),
-            "error": float(self.target - self.pressure),
+            "logic_state": int(logic_state),
+            "status_flags": 0,
         }
 
     def close(self) -> None:
@@ -532,7 +553,7 @@ class PumpEvalRunner:
             now = time.monotonic()
             t_phase_s = now - phase_t0
             state = self.bot.get_state()
-            pressure_raw = float(state["pressure"])
+            pressure_raw = float(state["control_pressure_kpa"])
             pressure_filtered = self.filter.add(pressure_raw)
             pwm_main = int(state.get("pwm_main", 0))
             pwm_aux = int(state.get("pwm_aux", 0))

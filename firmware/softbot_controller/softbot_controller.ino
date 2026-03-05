@@ -118,6 +118,7 @@ float Ki_pos = 1500.0f;
 
 const float TS_SECONDS = 0.020f;
 const int TS_MS = 20;
+const int TELEMETRY_PERIOD_MS = 100;
 
 float integral_pos_sum = 0.0f;
 float integral_neg_sum = 0.0f;
@@ -126,11 +127,14 @@ float safety_limit_min = -60.0f;
 
 float setpoint_pressure = 0.0f;
 float current_pressure = 0.0f;
+float sensor_pressure_ch0_kpa = 0.0f;
+float sensor_vacuum_ch1_kpa = 0.0f;
 int8_t control_mode = 0;
 int8_t active_chamber = 0;
 
 bool emergency_stop_active = false;
 unsigned long last_control_timestamp = 0;
+unsigned long last_telemetry_timestamp = 0;
 
 Adafruit_ADS1115 ads;
 const float V_OFFSET = 2.5f;
@@ -152,7 +156,8 @@ rcl_subscription_t sub_chamber;
 rcl_subscription_t sub_tuning;
 rcl_subscription_t sub_hwtest;
 
-rcl_publisher_t pub_feedback;
+rcl_publisher_t pub_sensor_pressure;
+rcl_publisher_t pub_sensor_vacuum;
 rcl_publisher_t pub_debug;
 
 std_msgs__msg__Float32 msg_setpoint;
@@ -160,11 +165,16 @@ std_msgs__msg__Int8 msg_mode;
 std_msgs__msg__Int8 msg_chamber;
 std_msgs__msg__Int16 msg_hwtest;
 std_msgs__msg__Float32MultiArray msg_tuning;
-std_msgs__msg__Float32 msg_feedback;
+std_msgs__msg__Float32 msg_sensor_pressure;
+std_msgs__msg__Float32 msg_sensor_vacuum;
 std_msgs__msg__Int16MultiArray msg_debug;
 
-int16_t debug_data[4];
+int16_t debug_data[6];
 float tuning_buffer[6];
+
+const uint16_t STATUS_FLAG_EMERGENCY_STOP = (1 << 0);
+const uint16_t STATUS_FLAG_DIAGNOSTIC_MODE = (1 << 1);
+const uint16_t STATUS_FLAG_PUBLISH_SOFT_FAILURE = (1 << 2);
 
 void fatal_error_loop(int code) {
   stopActuators();
@@ -200,6 +210,7 @@ void applySuctionControl(float error, int *pwm_main, int *pwm_aux);
 void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
                                     int16_t *active_aux);
 void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode);
+int16_t encodePressureDeciKpa(float value_kpa);
 
 // ==========================================
 // FUNCIONES
@@ -208,6 +219,17 @@ float readPressureChannel(uint8_t channel) {
   int16_t adc = ads.readADC_SingleEnded(channel);
   float volts = ads.computeVolts(adc);
   return (volts - V_OFFSET) / V_SENSITIVITY;
+}
+
+int16_t encodePressureDeciKpa(float value_kpa) {
+  float scaled = roundf(value_kpa * 10.0f);
+  if (scaled > 32767.0f) {
+    return 32767;
+  }
+  if (scaled < -32768.0f) {
+    return -32768;
+  }
+  return (int16_t)scaled;
 }
 
 void stopActuators() {
@@ -413,127 +435,125 @@ void cb_hwtest(const void *msgin) {
 // LOOP DE CONTROL
 // ==========================================
 void controlLoop() {
-  // Hardware diagnostic needs both sensors, handle it first and return early
-  if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
-    current_pressure = readPressureChannel(0);
-    float vacuum_pressure = readPressureChannel(1);
+  sensor_pressure_ch0_kpa = readPressureChannel(0);
+  sensor_vacuum_ch1_kpa = readPressureChannel(1);
 
-    msg_feedback.data = current_pressure;
-    RCSOFTCHECK(rcl_publish(&pub_feedback, &msg_feedback, NULL));
-
-    int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
-    int16_t active_main = 0;
-    int16_t active_aux = 0;
-    applyHardwareDiagnosticOutputs(hardware_test_mask, pwm_diag, &active_main, &active_aux);
-    debug_data[0] = active_main;
-    debug_data[1] = active_aux;
-    debug_data[2] = (int16_t)(vacuum_pressure * 10.0f); // Ch1 vacuum kPa × 10
-    debug_data[3] = (int16_t)control_mode;
-    msg_debug.data.data = debug_data;
-    msg_debug.data.size = 4;
-    RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
-    return;
-  }
-
-  if (control_mode == MODE_PID_SUCTION || control_mode == MODE_PWM_SUCTION) {
-    current_pressure = readPressureChannel(1);
-    if (current_pressure < safety_limit_min || current_pressure > safety_limit_max) {
-      triggerEmergencyStop();
-    }
-  } else {
-    current_pressure = readPressureChannel(0);
-    if (current_pressure > safety_limit_max || current_pressure < safety_limit_min) {
-      triggerEmergencyStop();
-    }
-  }
-
-  msg_feedback.data = current_pressure;
-  RCSOFTCHECK(rcl_publish(&pub_feedback, &msg_feedback, NULL));
-
-  if (emergency_stop_active) {
-    debug_data[0] = -1;
-    debug_data[1] = -1;
-    debug_data[2] = 0;
-    debug_data[3] = 0;
-    msg_debug.data.data = debug_data;
-    msg_debug.data.size = 4;
-    RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
-    return;
-  }
-
-  applyChamberSelectionMask(active_chamber, control_mode == MODE_VENT);
+  const bool suction_mode = (control_mode == MODE_PID_SUCTION || control_mode == MODE_PWM_SUCTION);
+  current_pressure = suction_mode ? sensor_vacuum_ch1_kpa : sensor_pressure_ch0_kpa;
 
   float error = setpoint_pressure - current_pressure;
   int pwm_main = 0;
   int pwm_aux = 0;
 
-  if (control_mode == MODE_VENT) { // VENTEAR (liberar presion a atmosfera)
-    // Bombas apagadas
-    ledcWrite(CH_INFLATE_MAIN, 0);
-    ledcWrite(CH_INFLATE_AUX, 0);
-    ledcWrite(CH_SUCCION_MAIN, 0);
-    ledcWrite(CH_SUCCION_AUX, 0);
+  if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
+    int16_t active_main = 0;
+    int16_t active_aux = 0;
+    applyHardwareDiagnosticOutputs(hardware_test_mask, pwm_diag, &active_main, &active_aux);
+    pwm_main = (int)active_main;
+    pwm_aux = (int)active_aux;
+  } else {
+    if (current_pressure > safety_limit_max || current_pressure < safety_limit_min) {
+      triggerEmergencyStop();
+    }
 
-    // Válvulas desenergizadas (A->R abierto / P cerrado)
-    digitalWrite(PIN_VALVE_INFLATE, LOW);
-    digitalWrite(PIN_VALVE_SUCTION, LOW);
-  } else if (control_mode == MODE_STOP || (active_chamber == 0 && control_mode != MODE_VENT)) {
-    stopActuators();
-    integral_pos_sum = 0;
-    integral_neg_sum = 0;
-  } else if (control_mode == MODE_PID_INFLATE) { // INFLAR PI PURO
-    digitalWrite(PIN_VALVE_INFLATE, HIGH);
-    digitalWrite(PIN_VALVE_SUCTION, LOW);
-    ledcWrite(CH_SUCCION_MAIN, 0);
-    ledcWrite(CH_SUCCION_AUX, 0);
-    applyInflateControl(error, &pwm_main, &pwm_aux);
-    ledcWrite(CH_INFLATE_MAIN, pwm_main);
-    ledcWrite(CH_INFLATE_AUX, pwm_aux);
-  } else if (control_mode == MODE_PID_SUCTION) { // SUCCIONAR PI PURO
-    ledcWrite(CH_INFLATE_MAIN, 0);
-    ledcWrite(CH_INFLATE_AUX, 0);
+    if (!emergency_stop_active) {
+      applyChamberSelectionMask(active_chamber, control_mode == MODE_VENT);
 
-    digitalWrite(PIN_VALVE_INFLATE, LOW);
-    digitalWrite(PIN_VALVE_SUCTION, HIGH);
-    applySuctionControl(error, &pwm_main, &pwm_aux);
-    ledcWrite(CH_SUCCION_MAIN, pwm_main);
-    ledcWrite(CH_SUCCION_AUX, pwm_aux);
-  }
-  // MODOS MANUALES
-  else if (control_mode == MODE_PWM_INFLATE || control_mode == MODE_PWM_SUCTION) {
-    pwm_main = constrain((int)setpoint_pressure, 0, 255);
+      if (control_mode == MODE_VENT) { // VENTEAR (liberar presion a atmosfera)
+        // Bombas apagadas
+        ledcWrite(CH_INFLATE_MAIN, 0);
+        ledcWrite(CH_INFLATE_AUX, 0);
+        ledcWrite(CH_SUCCION_MAIN, 0);
+        ledcWrite(CH_SUCCION_AUX, 0);
 
-    // Espejo Directo en Manual
-    if (pwm_main > THRESHOLD_AUX_ENABLE)
-      pwm_aux = pwm_main;
-    else
+        // Válvulas desenergizadas (A->R abierto / P cerrado)
+        digitalWrite(PIN_VALVE_INFLATE, LOW);
+        digitalWrite(PIN_VALVE_SUCTION, LOW);
+      } else if (control_mode == MODE_STOP || (active_chamber == 0 && control_mode != MODE_VENT)) {
+        stopActuators();
+        integral_pos_sum = 0;
+        integral_neg_sum = 0;
+      } else if (control_mode == MODE_PID_INFLATE) { // INFLAR PI PURO
+        digitalWrite(PIN_VALVE_INFLATE, HIGH);
+        digitalWrite(PIN_VALVE_SUCTION, LOW);
+        ledcWrite(CH_SUCCION_MAIN, 0);
+        ledcWrite(CH_SUCCION_AUX, 0);
+        applyInflateControl(error, &pwm_main, &pwm_aux);
+        ledcWrite(CH_INFLATE_MAIN, pwm_main);
+        ledcWrite(CH_INFLATE_AUX, pwm_aux);
+      } else if (control_mode == MODE_PID_SUCTION) { // SUCCIONAR PI PURO
+        ledcWrite(CH_INFLATE_MAIN, 0);
+        ledcWrite(CH_INFLATE_AUX, 0);
+
+        digitalWrite(PIN_VALVE_INFLATE, LOW);
+        digitalWrite(PIN_VALVE_SUCTION, HIGH);
+        applySuctionControl(error, &pwm_main, &pwm_aux);
+        ledcWrite(CH_SUCCION_MAIN, pwm_main);
+        ledcWrite(CH_SUCCION_AUX, pwm_aux);
+      }
+      // MODOS MANUALES
+      else if (control_mode == MODE_PWM_INFLATE || control_mode == MODE_PWM_SUCTION) {
+        pwm_main = constrain((int)setpoint_pressure, 0, 255);
+
+        // Espejo Directo en Manual
+        if (pwm_main > THRESHOLD_AUX_ENABLE)
+          pwm_aux = pwm_main;
+        else
+          pwm_aux = 0;
+
+        if (control_mode == MODE_PWM_INFLATE) { // Inflar
+          digitalWrite(PIN_VALVE_INFLATE, HIGH);
+          digitalWrite(PIN_VALVE_SUCTION, LOW);
+          ledcWrite(CH_SUCCION_MAIN, 0);
+          ledcWrite(CH_SUCCION_AUX, 0);
+          ledcWrite(CH_INFLATE_MAIN, pwm_main);
+          ledcWrite(CH_INFLATE_AUX, pwm_aux);
+        } else { // Succión
+          digitalWrite(PIN_VALVE_INFLATE, LOW);
+          digitalWrite(PIN_VALVE_SUCTION, HIGH);
+          ledcWrite(CH_INFLATE_MAIN, 0);
+          ledcWrite(CH_INFLATE_AUX, 0);
+          ledcWrite(CH_SUCCION_MAIN, pwm_main);
+          ledcWrite(CH_SUCCION_AUX, pwm_aux);
+        }
+      }
+    } else {
+      pwm_main = 0;
       pwm_aux = 0;
-
-    if (control_mode == MODE_PWM_INFLATE) { // Inflar
-      digitalWrite(PIN_VALVE_INFLATE, HIGH);
-      digitalWrite(PIN_VALVE_SUCTION, LOW);
-      ledcWrite(CH_SUCCION_MAIN, 0);
-      ledcWrite(CH_SUCCION_AUX, 0);
-      ledcWrite(CH_INFLATE_MAIN, pwm_main);
-      ledcWrite(CH_INFLATE_AUX, pwm_aux);
-    } else { // Succión
-      digitalWrite(PIN_VALVE_INFLATE, LOW);
-      digitalWrite(PIN_VALVE_SUCTION, HIGH);
-      ledcWrite(CH_INFLATE_MAIN, 0);
-      ledcWrite(CH_INFLATE_AUX, 0);
-      ledcWrite(CH_SUCCION_MAIN, pwm_main);
-      ledcWrite(CH_SUCCION_AUX, pwm_aux);
+      error = 0.0f;
     }
   }
 
-  debug_data[0] = pwm_main;
-  debug_data[1] = pwm_aux;
-  debug_data[2] = (int16_t)(error * 10);
-  debug_data[3] = (int16_t)control_mode;
+  uint16_t status_flags = 0;
+  if (emergency_stop_active) {
+    status_flags |= STATUS_FLAG_EMERGENCY_STOP;
+  }
+  if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    status_flags |= STATUS_FLAG_DIAGNOSTIC_MODE;
+  }
+  if (publish_soft_failures > 0) {
+    status_flags |= STATUS_FLAG_PUBLISH_SOFT_FAILURE;
+  }
+
+  debug_data[0] = (int16_t)pwm_main;
+  debug_data[1] = (int16_t)pwm_aux;
+  debug_data[2] = encodePressureDeciKpa(sensor_pressure_ch0_kpa);
+  debug_data[3] = encodePressureDeciKpa(sensor_vacuum_ch1_kpa);
+  debug_data[4] = (int16_t)control_mode;
+  debug_data[5] = (int16_t)status_flags;
   msg_debug.data.data = debug_data;
-  msg_debug.data.size = 4;
-  RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
-  RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
+  msg_debug.data.size = 6;
+
+  const unsigned long now = millis();
+  if (now - last_telemetry_timestamp >= TELEMETRY_PERIOD_MS) {
+    last_telemetry_timestamp = now;
+    msg_sensor_pressure.data = sensor_pressure_ch0_kpa;
+    msg_sensor_vacuum.data = sensor_vacuum_ch1_kpa;
+    RCSOFTCHECK(rcl_publish(&pub_sensor_pressure, &msg_sensor_pressure, NULL));
+    RCSOFTCHECK(rcl_publish(&pub_sensor_vacuum, &msg_sensor_vacuum, NULL));
+    RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
+  }
 }
 
 // ==========================================
@@ -579,15 +599,18 @@ void setup() {
   RCCHECK(rclc_subscription_init_default(
       &sub_hwtest, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16), "hardware_test"));
 
-  RCCHECK(rclc_publisher_init_default(&pub_feedback, &node,
+  RCCHECK(rclc_publisher_init_default(&pub_sensor_pressure, &node,
                                       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-                                      "pressure_feedback"));
+                                      "sensor/pressure"));
+  RCCHECK(rclc_publisher_init_default(&pub_sensor_vacuum, &node,
+                                      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+                                      "sensor/vacuum"));
   RCCHECK(rclc_publisher_init_default(&pub_debug, &node,
                                       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16MultiArray),
                                       "system_debug"));
 
-  msg_debug.data.capacity = 4;
-  msg_debug.data.size = 4;
+  msg_debug.data.capacity = 6;
+  msg_debug.data.size = 6;
   msg_debug.data.data = debug_data;
   msg_tuning.data.capacity = 6;
   msg_tuning.data.size = 6;
@@ -611,6 +634,7 @@ void setup() {
                                          ON_NEW_DATA));
 
   last_control_timestamp = millis();
+  last_telemetry_timestamp = millis() - TELEMETRY_PERIOD_MS;
 }
 
 void loop() {

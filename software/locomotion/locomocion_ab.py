@@ -101,7 +101,7 @@ class AutoSingleMoveSequencer:
 
     def _get_pressure(self):
         state = self.bot.get_state()
-        return state.get("pressure", None)
+        return state.get("control_pressure_kpa", None)
 
     def _print_status(self, now: float):
         if (now - self.last_print) < self.print_period:
@@ -110,7 +110,7 @@ class AutoSingleMoveSequencer:
 
         p = self._get_pressure()
         if p is None:
-            sys.stdout.write("\r\033[K📟 Estado: sin 'pressure' en get_state()")
+            sys.stdout.write("\r\033[K📟 Estado: sin 'control_pressure_kpa' en get_state()")
             sys.stdout.flush()
             return
 

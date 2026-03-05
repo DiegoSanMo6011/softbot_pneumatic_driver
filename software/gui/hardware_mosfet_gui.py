@@ -384,8 +384,8 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
 
     def _manual_state(self) -> dict[str, bool]:
         return {
-            "pressure": self.cb_pressure_group.isChecked(),
-            "vacuum": self.cb_vacuum_group.isChecked(),
+            "pressure_group": self.cb_pressure_group.isChecked(),
+            "vacuum_group": self.cb_vacuum_group.isChecked(),
             "valve_inflate": self.cb_valve_inflate.isChecked(),
             "valve_suction": self.cb_valve_suction.isChecked(),
             "valve_chamber_c": self.cb_valve_chamber_c.isChecked(),
@@ -558,8 +558,8 @@ class HardwareMosfetGUI(QtWidgets.QMainWindow):
     def on_apply_manual(self):
         state = self._manual_state()
         mask = self.bot.set_hardware_groups(
-            pressure_on=state["pressure"],
-            vacuum_on=state["vacuum"],
+            pressure_on=state["pressure_group"],
+            vacuum_on=state["vacuum_group"],
             valves={
                 "inflate": state["valve_inflate"],
                 "suction": state["valve_suction"],

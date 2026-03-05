@@ -63,7 +63,7 @@ def run_test(bot, kp, ki, writer):
         now = time.time() - start_time
         try:
             state = bot.get_state()
-            p_curr = state["pressure"]
+            p_curr = state["control_pressure_kpa"]
 
             if p_curr > max_pressure:
                 max_pressure = p_curr

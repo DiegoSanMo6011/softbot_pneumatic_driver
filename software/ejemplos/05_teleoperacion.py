@@ -64,7 +64,7 @@ def print_status(bot, action, chamber, target):
     # Borrar línea actual y reescribir
     sys.stdout.write(
         f"\r\033[K🎮 Acción: {action} [{chamber}] | "
-        f"Objetivo: {target} kPa | Actual: {state['pressure']:.2f} kPa"
+        f"Objetivo: {target} kPa | Actual: {state['control_pressure_kpa']:.2f} kPa"
     )
     sys.stdout.flush()
 

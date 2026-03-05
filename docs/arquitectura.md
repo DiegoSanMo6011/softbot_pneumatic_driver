@@ -40,8 +40,9 @@ Regla especial en modo `VENT`:
 | `/active_chamber` | `std_msgs/Int8` | Bitmask 0..7 (A/B/C y combinaciones) |
 | `/pressure_mode` | `std_msgs/Int8` | 1: PID inflado, -1: PID succión, 2: PWM inflado, -2: PWM succión, 4: venteo, 9: diagnóstico de hardware |
 | `/pressure_setpoint` | `std_msgs/Float32` | Setpoint (kPa o PWM según modo) |
-| `/pressure_feedback` | `std_msgs/Float32` | Presión medida en kPa |
-| `/system_debug` | `std_msgs/Int16MultiArray` | [PWM_main, PWM_aux, error*10, mode] |
+| `/sensor/pressure` | `std_msgs/Float32` | Sensor ADS1115 Ch0 (kPa) |
+| `/sensor/vacuum` | `std_msgs/Float32` | Sensor ADS1115 Ch1 (kPa) |
+| `/system_debug` | `std_msgs/Int16MultiArray` | [PWM_main, PWM_aux, ch0*10, ch1*10, mode, flags] |
 | `/tuning_params` | `std_msgs/Float32MultiArray` | [Kp_pos, Ki_pos, Kp_neg, Ki_neg, max_safe, min_safe] |
 | `/hardware_test` | `std_msgs/Int16` | Bitmask de salidas para modo 9 (bombas/válvulas/mux) |
 

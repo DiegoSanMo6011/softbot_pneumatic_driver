@@ -230,12 +230,12 @@ Verificación rápida del puente:
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=0
 ros2 node list
-ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber"
+ros2 topic list | egrep "sensor/|pressure_mode|hardware_test|system_debug|active_chamber"
 ```
 
 Resultado esperado con sistema activo:
 - Nodo `soft_robot_node` visible.
-- Tópicos de control/telemetría visibles (`/pressure_mode`, `/hardware_test`, `/system_debug`, etc.).
+- Tópicos de control/telemetría visibles (`/pressure_mode`, `/sensor/pressure`, `/sensor/vacuum`, `/system_debug`, etc.).
 - Selección de cámara por bitmask en `/active_chamber`: `A=1`, `B=2`, `C=4`, combinaciones hasta `7`.
 
 ## 6) Diagnóstico de hardware (intención y secuencia)
@@ -268,7 +268,7 @@ Test robusto recomendado (contrato ROS de firmware + `system_debug`):
 
 Qué valida `hardware verify`:
 1. Existe el nodo de firmware `soft_robot_node`.
-2. Existen tópicos de telemetría esperados y tienen publisher (`/pressure_feedback`, `/system_debug`).
+2. Existen tópicos de telemetría esperados y tienen publisher (`/sensor/pressure`, `/sensor/vacuum`, `/system_debug`).
 3. Existen tópicos de comando esperados y tienen subscriber del firmware.
 4. Llega al menos un mensaje real en `/system_debug` (si no usas `--no-system-debug-sample`).
 
@@ -394,7 +394,7 @@ export ROS_DOMAIN_ID=0
 ros2 daemon stop
 ros2 daemon start
 ros2 node list
-ros2 topic list | egrep "pressure_|hardware_test|system_debug|active_chamber"
+ros2 topic list | egrep "sensor/|pressure_mode|hardware_test|system_debug|active_chamber"
 ```
 
 Notas importantes:
@@ -419,7 +419,7 @@ Validaciones mínimas:
    - `/hardware_test` debe mostrar máscara `12`.
 3. En GUI activar ambas:
    - `/hardware_test` debe mostrar máscara `15`.
-4. En `/system_debug`, los dos primeros campos deben reflejar PWM activo por grupo.
+4. En `/system_debug`, el payload debe ser `[pwm_main,pwm_aux,ch0_x10,ch1_x10,mode,flags]`.
 
 Interpretación:
 - Si ROS muestra cambios y el LED MOSFET no enciende: problema en ruta eléctrica (driver, MOSFET, alimentación, cableado o board).
@@ -428,7 +428,7 @@ Interpretación:
 - Si `hardware verify` falla en `/system_debug sample`: revisar que la ESP32 esté enlazada al agent, resetear ESP32 y repetir.
 
 ## `/hardware_test` ausente pero telemetría presente
-Si `soft_robot_node` aparece y tienes `/pressure_feedback`, `/system_debug`, `/tank_state`, pero falta `/hardware_test`,
+Si `soft_robot_node` aparece y tienes `/sensor/pressure`, `/sensor/vacuum` y `/system_debug`, pero falta `/hardware_test`,
 la causa probable es límite de suscripciones en la librería precompilada de `micro_ros_arduino`.
 
 Rebuild recomendado:

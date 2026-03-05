@@ -77,14 +77,17 @@ def main():
                     [
                         f"{t_curr:.4f}",
                         TARGET_PRESSURE,
-                        f"{data['pressure']:.3f}",
+                        f"{data['control_pressure_kpa']:.3f}",
                         data["pwm_main"],
                         data["pwm_aux"],
-                        f"{data['error']:.3f}",
+                        f"{TARGET_PRESSURE - float(data['control_pressure_kpa']):.3f}",
                     ]
                 )
 
-                print(f"T={t_curr:.2f}s | P={data['pressure']:.2f} kPa | PWM={data['pwm_main']}")
+                print(
+                    f"T={t_curr:.2f}s | P={data['control_pressure_kpa']:.2f} kPa | "
+                    f"PWM={data['pwm_main']}"
+                )
 
                 elapsed = time.time() - loop_start
                 if elapsed < SAMPLING_RATE:

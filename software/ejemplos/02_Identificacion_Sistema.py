@@ -88,15 +88,16 @@ def main():
                         [
                             f"{t_curr:.4f}",
                             target_p,
-                            f"{data['pressure']:.3f}",
+                            f"{data['control_pressure_kpa']:.3f}",
                             data["pwm_main"],
                             data["pwm_aux"],
-                            f"{data['error']:.3f}",
+                            f"{target_p - float(data['control_pressure_kpa']):.3f}",
                         ]
                     )
 
                     print(
-                        f"\r   T={t_curr:.2f}s | Ref={target_p} | P={data['pressure']:.2f} kPa",
+                        f"\r   T={t_curr:.2f}s | Ref={target_p} | "
+                        f"P={data['control_pressure_kpa']:.2f} kPa",
                         end="",
                     )
 

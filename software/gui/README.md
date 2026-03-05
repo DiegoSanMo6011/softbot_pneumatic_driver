@@ -77,7 +77,8 @@ Incluye:
 - Control de PWM configurable (0–255).
 - Registro Min/Max con reset para medir caídas de presión (detección de fugas).
 - Botón de emergencia TODO OFF.
-- Telemetría debug (PWM Main/Aux, Error, Mode, Mask).
+- Telemetría debug (PWM Main/Aux, Mode, Flags, Mask).
+- Contrato ROS actualizado: `/sensor/pressure`, `/sensor/vacuum`, `/system_debug`.
 
 ## Dependencias
 - `pyqtgraph` (para `softbot_gui.py` y `pump_eval_gui.py`)
@@ -103,4 +104,3 @@ También disponible por CLI:
 ./scripts/labctl hardware gui --foreground
 ./scripts/labctl benchmark pumps --pump-label actuales --chamber 7 --target-kpa 35 --runs 5
 ```
-

@@ -46,7 +46,7 @@ def main():
             time.sleep(HOLD_S)
 
             state = bot.get_state()
-            print(f"   Telemetría: P={state['pressure']:.2f} kPa PWM={state['pwm_main']}")
+            print(f"   Telemetría: P={state['control_pressure_kpa']:.2f} kPa PWM={state['pwm_main']}")
 
             print(f"⬅️  Cámara {label} (mask={mask}) | Succión {SUCTION_KPA} kPa")
             bot.suction(SUCTION_KPA)

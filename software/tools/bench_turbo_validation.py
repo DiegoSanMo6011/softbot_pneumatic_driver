@@ -141,7 +141,7 @@ def collect_run(
     time.sleep(max(0.0, rest_s))
 
     pre_state = bot.get_state()
-    baseline = float(pre_state["pressure"])
+    baseline = float(pre_state["control_pressure_kpa"])
 
     if mode == "pid":
         bot.inflate(target_kpa)
@@ -160,10 +160,10 @@ def collect_run(
                 mode=mode,
                 run_idx=run_idx,
                 t_s=t_rel,
-                pressure_kpa=float(state["pressure"]),
+                pressure_kpa=float(state["control_pressure_kpa"]),
                 pwm_main=int(state["pwm_main"]),
                 pwm_aux=int(state["pwm_aux"]),
-                error_kpa=float(state["error"]),
+                error_kpa=float(target_kpa - float(state["control_pressure_kpa"])),
             )
         )
 

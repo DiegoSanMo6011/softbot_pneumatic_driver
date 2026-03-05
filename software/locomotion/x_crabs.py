@@ -290,7 +290,7 @@ class PhaseRunner:
         phase = self.phases[self.idx]
         elapsed = now - self.phase_start
         state = self.bot.get_state()
-        p_curr = state["pressure"]
+        p_curr = state["control_pressure_kpa"]
 
         # --- INICIO DE FASE ---
         if self.first_run:

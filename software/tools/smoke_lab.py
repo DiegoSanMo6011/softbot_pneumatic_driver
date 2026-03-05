@@ -63,7 +63,7 @@ def main() -> int:
         state = bot.get_state()
         print(
             "[smoke] Feedback: "
-            f"P={state['pressure']:.2f} kPa "
+            f"P={state['control_pressure_kpa']:.2f} kPa "
             f"PWM=({state['pwm_main']},{state['pwm_aux']})"
         )
 

@@ -1136,7 +1136,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     hw_verify = hardware_sub.add_parser(
         "verify",
-        help="Verify firmware ROS node, command/telemetry topics, and /system_debug traffic",
+        help="Verify firmware ROS node, dual-sensor telemetry topics, and /system_debug schema",
     )
     hw_verify.add_argument("--timeout-s", type=float, default=8.0)
     hw_verify.add_argument("--sample-timeout-s", type=float, default=3.0)

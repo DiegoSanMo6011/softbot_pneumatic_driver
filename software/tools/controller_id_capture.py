@@ -201,10 +201,11 @@ def main() -> int:
                                 repeat_idx=repeat_idx,
                                 t_session_s=now - session_t0,
                                 t_step_s=t_step_s,
-                                pressure_kpa=float(state.get("pressure", 0.0)),
+                                pressure_kpa=float(state.get("control_pressure_kpa", 0.0)),
                                 pwm_main=int(state.get("pwm_main", 0)),
                                 pwm_aux=int(state.get("pwm_aux", 0)),
-                                error_kpa=float(state.get("error", 0.0)),
+                                # Open-loop PWM capture has no kPa setpoint error semantics.
+                                error_kpa=0.0,
                                 chamber=int(args.chamber),
                             )
                         )

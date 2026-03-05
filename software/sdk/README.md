@@ -42,6 +42,9 @@ software/
   Incluye `set_hardware_groups(pressure_on, vacuum_on, valves, mux, pwm)` para
   diagnóstico por grupos de bombas + válvulas/mux independientes.
   Incluye `stop_hardware_test()` para apagar salidas de diagnóstico.
+  Telemetría dual por tópicos: `/sensor/pressure` (Ch0) y `/sensor/vacuum` (Ch1).
+  `get_state()` expone `sensor_pressure_kpa`, `sensor_vacuum_kpa`,
+  `control_pressure_kpa`, `pwm_main`, `pwm_aux`, `logic_state` y `status_flags`.
 
 - **`ejemplos/`**  
   Conjunto de scripts listos para ejecución directa que demuestran distintos modos de operación y validación del sistema.
