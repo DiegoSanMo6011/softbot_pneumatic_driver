@@ -13,7 +13,7 @@ Documento principal para operación en laboratorio, diagnóstico de hardware, ca
 
 ## 1.1) GUIs: qué hace cada una y cómo correrla
 ### GUI principal (`gui start`)
-- **Qué hace:** control general (PID/PWM/vent), telemetría en vivo y benchmark básico.
+- **Qué hace:** control general con selector `Direct / Auto / Arm / Fire`, telemetría en vivo y benchmark básico.
 - **Cuándo usarla:** operación diaria, tuning rápido y monitoreo durante pruebas.
 - **Cómo correrla:**
 ```bash
@@ -37,7 +37,7 @@ Documento principal para operación en laboratorio, diagnóstico de hardware, ca
 ```
 
 ### GUI de locomoción (`gui locomotion`)
-- **Qué hace:** permite diseñar, ejecutar y validar secuencias por fases (PID/PWM/vent/stop) con bitmask de 3 cámaras (`A/B/C` y combinaciones).
+- **Qué hace:** permite diseñar, ejecutar y validar secuencias por fases (PID/PWM/vent/stop) con bitmask de 3 cámaras (`A/B/C` y combinaciones) y `behavior` por fase.
 - **Cuándo usarla:** iteración rápida de locomoción, validación de secuencias ya funcionales y experimentación controlada.
 - **Cómo correrla:**
 ```bash
@@ -230,13 +230,14 @@ Verificación rápida del puente:
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=0
 ros2 node list
-ros2 topic list | egrep "sensor/|pressure_mode|hardware_test|system_debug|active_chamber"
+ros2 topic list | egrep "sensor/|pneumatic_|pressure_mode|hardware_test|system_debug|active_chamber"
 ```
 
 Resultado esperado con sistema activo:
 - Nodo `soft_robot_node` visible.
-- Tópicos de control/telemetría visibles (`/pressure_mode`, `/sensor/pressure`, `/sensor/vacuum`, `/system_debug`, etc.).
-- Selección de cámara por bitmask en `/active_chamber`: `A=1`, `B=2`, `C=4`, combinaciones hasta `7`.
+- Tópicos de control/telemetría visibles (`/pneumatic_command`, `/pneumatic_state`, `/sensor/pressure`, `/sensor/vacuum`, `/system_debug`, etc.).
+- El control operativo principal ocurre por `/pneumatic_command`; `/active_chamber`, `/pressure_mode` y `/pressure_setpoint` quedan solo como compatibilidad legacy `DIRECT`.
+- Selección de cámara por bitmask: `A=1`, `B=2`, `C=4`, combinaciones hasta `7`.
 
 ## 6) Diagnóstico de hardware (intención y secuencia)
 Comando recomendado:
@@ -268,9 +269,9 @@ Test robusto recomendado (contrato ROS de firmware + `system_debug`):
 
 Qué valida `hardware verify`:
 1. Existe el nodo de firmware `soft_robot_node`.
-2. Existen tópicos de telemetría esperados y tienen publisher (`/sensor/pressure`, `/sensor/vacuum`, `/system_debug`).
+2. Existen tópicos de telemetría esperados y tienen publisher (`/sensor/pressure`, `/sensor/vacuum`, `/system_debug`, `/pneumatic_state`).
 3. Existen tópicos de comando esperados y tienen subscriber del firmware.
-4. Llega al menos un mensaje real en `/system_debug` (si no usas `--no-system-debug-sample`).
+4. Llegan muestras reales en `/system_debug` y `/pneumatic_state` (si no usas `--no-system-debug-sample`).
 
 ## 6.1) Benchmark de bombas para competencia (antes/después del cambio)
 Objetivo:
@@ -394,7 +395,7 @@ export ROS_DOMAIN_ID=0
 ros2 daemon stop
 ros2 daemon start
 ros2 node list
-ros2 topic list | egrep "sensor/|pressure_mode|hardware_test|system_debug|active_chamber"
+ros2 topic list | egrep "sensor/|pneumatic_|pressure_mode|hardware_test|system_debug|active_chamber"
 ```
 
 Notas importantes:
@@ -409,17 +410,19 @@ export ROS_DOMAIN_ID=0
 ros2 topic echo /hardware_test
 ros2 topic echo /pressure_mode
 ros2 topic echo /system_debug
+ros2 topic echo /pneumatic_state
 ```
 
 Validaciones mínimas:
 1. En GUI activar **Bombas de Presión**:
    - `/pressure_mode` debe ir a `9` (modo diagnóstico).
-   - `/hardware_test` debe mostrar máscara `3`.
+    - `/hardware_test` debe mostrar máscara `3`.
 2. En GUI activar **Bombas de Vacío**:
    - `/hardware_test` debe mostrar máscara `12`.
 3. En GUI activar ambas:
    - `/hardware_test` debe mostrar máscara `15`.
 4. En `/system_debug`, el payload debe ser `[pwm_main,pwm_aux,ch0_x10,ch1_x10,mode,flags]`.
+5. `/pneumatic_state` debe existir como heartbeat del firmware, aunque en diagnóstico hardware el control principal siga entrando por `/pressure_mode` + `/hardware_test`.
 
 Interpretación:
 - Si ROS muestra cambios y el LED MOSFET no enciende: problema en ruta eléctrica (driver, MOSFET, alimentación, cableado o board).

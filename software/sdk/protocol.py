@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 # Chamber selection.
@@ -34,6 +34,59 @@ MODE_PWM_SUCTION = -2
 MODE_VENT = 4
 MODE_HARDWARE_DIAGNOSTIC = 9
 
+PID_CONTROL_MODES = (MODE_PID_INFLATE, MODE_PID_SUCTION)
+PWM_CONTROL_MODES = (MODE_PWM_INFLATE, MODE_PWM_SUCTION)
+PRESSURE_CONTROL_MODES = PID_CONTROL_MODES + PWM_CONTROL_MODES
+
+# Atomic pneumatic command protocol.
+PNEUMATIC_PROTOCOL_VERSION = 1
+PNEUMATIC_COMMAND_LENGTH = 6
+PNEUMATIC_STATE_LENGTH = 10
+
+PNEUMATIC_BEHAVIOR_DIRECT = 0
+PNEUMATIC_BEHAVIOR_AUTO = 1
+PNEUMATIC_BEHAVIOR_ARM = 2
+PNEUMATIC_BEHAVIOR_FIRE = 3
+VALID_PNEUMATIC_BEHAVIORS = (
+    PNEUMATIC_BEHAVIOR_DIRECT,
+    PNEUMATIC_BEHAVIOR_AUTO,
+    PNEUMATIC_BEHAVIOR_ARM,
+    PNEUMATIC_BEHAVIOR_FIRE,
+)
+
+PNEUMATIC_STATE_IDLE = 0
+PNEUMATIC_STATE_DIRECT = 1
+PNEUMATIC_STATE_PRECHARGE = 2
+PNEUMATIC_STATE_READY_HOLD = 3
+PNEUMATIC_STATE_DELIVER = 4
+PNEUMATIC_STATE_VENT = 5
+PNEUMATIC_STATE_FAULT = 6
+
+PNEUMATIC_FLAG_READY = 1 << 0
+PNEUMATIC_FLAG_ARMED = 1 << 1
+PNEUMATIC_FLAG_DELIVERING = 1 << 2
+PNEUMATIC_FLAG_TIMEOUT = 1 << 3
+PNEUMATIC_FLAG_COMMAND_REJECTED = 1 << 4
+PNEUMATIC_FLAG_EMERGENCY_STOP = 1 << 5
+PNEUMATIC_FLAG_LEGACY_INPUT = 1 << 6
+
+PNEUMATIC_BEHAVIOR_LABELS = {
+    PNEUMATIC_BEHAVIOR_DIRECT: "DIRECT",
+    PNEUMATIC_BEHAVIOR_AUTO: "AUTO",
+    PNEUMATIC_BEHAVIOR_ARM: "ARM",
+    PNEUMATIC_BEHAVIOR_FIRE: "FIRE",
+}
+
+PNEUMATIC_STATE_LABELS = {
+    PNEUMATIC_STATE_IDLE: "IDLE",
+    PNEUMATIC_STATE_DIRECT: "DIRECT",
+    PNEUMATIC_STATE_PRECHARGE: "PRECHARGE",
+    PNEUMATIC_STATE_READY_HOLD: "READY_HOLD",
+    PNEUMATIC_STATE_DELIVER: "DELIVER",
+    PNEUMATIC_STATE_VENT: "VENT",
+    PNEUMATIC_STATE_FAULT: "FAULT",
+}
+
 # Hardware diagnostic bitmask for /hardware_test.
 HW_PUMP_INFLATE_MAIN = 1 << 0
 HW_PUMP_INFLATE_AUX = 1 << 1
@@ -61,6 +114,36 @@ class HardwareComponent:
     @property
     def mask(self) -> int:
         return 1 << self.bit
+
+
+@dataclass(frozen=True)
+class PneumaticStateFrame:
+    version: int
+    state: int
+    mode: int
+    behavior: int
+    requested_chamber_mask: int
+    applied_chamber_mask: int
+    flags: int
+    target_raw: int
+    source_pressure_raw: int
+    command_token: int
+
+    @property
+    def state_label(self) -> str:
+        return PNEUMATIC_STATE_LABELS.get(self.state, str(self.state))
+
+    @property
+    def behavior_label(self) -> str:
+        return PNEUMATIC_BEHAVIOR_LABELS.get(self.behavior, str(self.behavior))
+
+    @property
+    def target_value(self) -> float:
+        return decode_pneumatic_target(self.mode, self.target_raw)
+
+    @property
+    def source_pressure_kpa(self) -> float:
+        return deci_kpa_to_float(self.source_pressure_raw)
 
 
 HARDWARE_COMPONENTS = (
@@ -207,6 +290,107 @@ def build_hardware_mask(
 def decode_hardware_mask(mask: int) -> list[str]:
     mask = int(mask)
     return [component.id for component in HARDWARE_COMPONENTS if (mask & component.mask) != 0]
+
+
+def validate_chamber_mask(chamber_mask: int) -> int:
+    chamber_mask = int(chamber_mask)
+    if chamber_mask not in VALID_CHAMBERS:
+        raise ValueError(f"Invalid chamber {chamber_mask}. Valid values: {VALID_CHAMBERS}")
+    return chamber_mask
+
+
+def validate_pneumatic_behavior(mode: int, behavior: int) -> int:
+    mode = int(mode)
+    behavior = int(behavior)
+    if behavior not in VALID_PNEUMATIC_BEHAVIORS:
+        raise ValueError(
+            f"Invalid pneumatic behavior {behavior}. Valid values: {VALID_PNEUMATIC_BEHAVIORS}"
+        )
+    if mode in PWM_CONTROL_MODES and behavior != PNEUMATIC_BEHAVIOR_DIRECT:
+        raise ValueError("PWM modes only support DIRECT behavior.")
+    if mode not in PID_CONTROL_MODES and behavior in (
+        PNEUMATIC_BEHAVIOR_AUTO,
+        PNEUMATIC_BEHAVIOR_ARM,
+        PNEUMATIC_BEHAVIOR_FIRE,
+    ):
+        raise ValueError("AUTO/ARM/FIRE are only valid for PID inflate/suction modes.")
+    return behavior
+
+
+def clamp_int16(value: int | float) -> int:
+    value = int(round(float(value)))
+    if value > 32767:
+        return 32767
+    if value < -32768:
+        return -32768
+    return value
+
+
+def encode_deci_kpa(value_kpa: int | float) -> int:
+    return clamp_int16(float(value_kpa) * 10.0)
+
+
+def deci_kpa_to_float(value: int | float) -> float:
+    return float(int(value)) / 10.0
+
+
+def encode_pneumatic_target(mode: int, target: int | float) -> int:
+    mode = int(mode)
+    if mode in PID_CONTROL_MODES:
+        return encode_deci_kpa(target)
+    if mode in PWM_CONTROL_MODES:
+        return clamp_int16(max(0, min(255, int(round(float(target))))))
+    return 0
+
+
+def decode_pneumatic_target(mode: int, raw_target: int | float) -> float:
+    mode = int(mode)
+    raw_target = int(raw_target)
+    if mode in PID_CONTROL_MODES:
+        return deci_kpa_to_float(raw_target)
+    if mode in PWM_CONTROL_MODES:
+        return float(raw_target)
+    return 0.0
+
+
+def build_pneumatic_command_payload(
+    *,
+    mode: int,
+    chamber_mask: int,
+    behavior: int,
+    target: int | float,
+    token: int = 0,
+) -> list[int]:
+    mode = int(mode)
+    chamber_mask = validate_chamber_mask(chamber_mask)
+    behavior = validate_pneumatic_behavior(mode, behavior)
+    return [
+        PNEUMATIC_PROTOCOL_VERSION,
+        mode,
+        chamber_mask,
+        behavior,
+        encode_pneumatic_target(mode, target),
+        clamp_int16(token),
+    ]
+
+
+def decode_pneumatic_state_payload(payload: Sequence[int | float]) -> PneumaticStateFrame:
+    if len(payload) < PNEUMATIC_STATE_LENGTH:
+        raise ValueError(
+            f"Expected {PNEUMATIC_STATE_LENGTH} pneumatic-state values, got {len(payload)}."
+        )
+    return PneumaticStateFrame(
+        version=int(payload[0]),
+        state=int(payload[1]),
+        mode=int(payload[2]),
+        behavior=int(payload[3]),
+        requested_chamber_mask=int(payload[4]),
+        applied_chamber_mask=int(payload[5]),
+        flags=int(payload[6]),
+        target_raw=int(payload[7]),
+        source_pressure_raw=int(payload[8]),
+        command_token=int(payload[9]),
+    )
 
 
 validate_hardware_components_fit_int16()

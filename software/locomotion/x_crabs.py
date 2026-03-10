@@ -25,7 +25,9 @@ from sdk.protocol import (
     CHAMBER_A,
     CHAMBER_AB,
     CHAMBER_B,
-    MODE_PWM_SUCTION,
+    MODE_PID_INFLATE,
+    MODE_PID_SUCTION,
+    PNEUMATIC_BEHAVIOR_AUTO,
 )
 from sdk.softbot_interface import SoftBot
 
@@ -297,34 +299,24 @@ class PhaseRunner:
             print(f"\n   👉 {phase.name} | Obj:{phase.target} kPa")
             self.arrival_time = None
 
-            # TRUCO DE SIMULTANEIDAD PARA CAMINATA (CRAWLING)
-            # Objetivo: Lograr movimientos opuestos simultáneos
-            if self.strategy.name == "CAMINATA (Alternada)":
-                if phase.name.startswith("PASO A"):
-                    # 1. B Succiona RÁPIDO (PWM Directo 100%)
-                    self.bot.set_chamber(CHAMBER_B)
-                    self.bot.set_pwm(255.0, MODE_PWM_SUCTION)
-                    time.sleep(0.05)
-                    # 2. A Infla CONTROLADO (PID)
-                    self.bot.set_chamber(CHAMBER_A)
-                    self.bot.inflate(phase.target)
-                elif phase.name.startswith("PASO B"):
-                    # 1. A Succiona RÁPIDO (PWM Directo 100%)
-                    self.bot.set_chamber(CHAMBER_A)
-                    self.bot.set_pwm(255.0, MODE_PWM_SUCTION)
-                    time.sleep(0.05)
-                    # 2. B Infla CONTROLADO (PID)
-                    self.bot.set_chamber(CHAMBER_B)
-                    self.bot.inflate(phase.target)
-            else:
-                # Estándar para otros modos
-                self.bot.set_chamber(phase.chamber)
-                if phase.action == "inflate":
-                    self.bot.inflate(phase.target)
-                elif phase.action == "suction":
-                    self.bot.suction(phase.target)
-                elif phase.action == "stop":
-                    self.bot.stop()
+            # La arquitectura vigente usa un único manifold de modo por ciclo.
+            # Cada fase aplica un solo modo neumático a la máscara seleccionada.
+            if phase.action == "inflate":
+                self.bot.send_pneumatic_command(
+                    mode=MODE_PID_INFLATE,
+                    chamber_mask=phase.chamber,
+                    target=phase.target,
+                    behavior=PNEUMATIC_BEHAVIOR_AUTO,
+                )
+            elif phase.action == "suction":
+                self.bot.send_pneumatic_command(
+                    mode=MODE_PID_SUCTION,
+                    chamber_mask=phase.chamber,
+                    target=phase.target,
+                    behavior=PNEUMATIC_BEHAVIOR_AUTO,
+                )
+            elif phase.action == "stop":
+                self.bot.stop()
 
             self.first_run = False
             self._within_since = None

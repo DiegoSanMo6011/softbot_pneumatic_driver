@@ -39,11 +39,16 @@ from sdk.protocol import (  # noqa: E402
     CHAMBER_BC,
     CHAMBER_BLOCKED,
     CHAMBER_C,
+    MODE_PID_INFLATE,
+    MODE_PID_SUCTION,
     MODE_PWM_INFLATE,
     MODE_PWM_SUCTION,
+    PNEUMATIC_BEHAVIOR_ARM,
+    PNEUMATIC_BEHAVIOR_AUTO,
+    PNEUMATIC_BEHAVIOR_DIRECT,
+    PNEUMATIC_BEHAVIOR_FIRE,
 )
 from sdk.softbot_interface import SoftBot  # noqa: E402
-
 
 ACTION_PID_INFLATE = "pid_inflate"
 ACTION_PID_SUCTION = "pid_suction"
@@ -61,6 +66,14 @@ ACTION_OPTIONS = (
     ("Stop", ACTION_STOP),
 )
 ACTION_LABELS = {value: label for label, value in ACTION_OPTIONS}
+
+BEHAVIOR_OPTIONS = (
+    ("Direct", PNEUMATIC_BEHAVIOR_DIRECT),
+    ("Auto", PNEUMATIC_BEHAVIOR_AUTO),
+    ("Arm", PNEUMATIC_BEHAVIOR_ARM),
+    ("Fire", PNEUMATIC_BEHAVIOR_FIRE),
+)
+BEHAVIOR_LABELS = {value: label for label, value in BEHAVIOR_OPTIONS}
 
 CHAMBER_OPTIONS = (
     ("A (1)", CHAMBER_A),
@@ -83,12 +96,13 @@ COL_ENABLED = 0
 COL_NAME = 1
 COL_CHAMBER = 2
 COL_ACTION = 3
-COL_TARGET = 4
-COL_MIN = 5
-COL_MAX = 6
-COL_TOL = 7
-COL_SETTLE = 8
-COL_SNAP = 9
+COL_BEHAVIOR = 4
+COL_TARGET = 5
+COL_MIN = 6
+COL_MAX = 7
+COL_TOL = 8
+COL_SETTLE = 9
+COL_SNAP = 10
 
 
 @dataclass
@@ -99,12 +113,13 @@ class PhaseSpec:
     target: float
     min_time_s: float
     max_time_s: float
+    behavior: int = PNEUMATIC_BEHAVIOR_AUTO
     tol_kpa: float = 3.0
     settle_s: float = 0.08
     snap_ms: int = 0
     enabled: bool = True
 
-    def normalized(self) -> "PhaseSpec":
+    def normalized(self) -> PhaseSpec:
         name = str(self.name).strip() or "phase"
         chamber = int(self.chamber)
         if chamber not in CHAMBER_VALUES:
@@ -114,6 +129,13 @@ class PhaseSpec:
         valid_actions = {value for _, value in ACTION_OPTIONS}
         if action not in valid_actions:
             raise ValueError(f"Invalid action: {action}")
+
+        behavior = int(self.behavior)
+        valid_behaviors = {value for _, value in BEHAVIOR_OPTIONS}
+        if behavior not in valid_behaviors:
+            raise ValueError(f"Invalid behavior: {behavior}")
+        if action in PWM_ACTIONS or action in {ACTION_VENT, ACTION_STOP}:
+            behavior = PNEUMATIC_BEHAVIOR_DIRECT
 
         target = float(self.target)
         min_time_s = max(0.0, float(self.min_time_s))
@@ -126,6 +148,7 @@ class PhaseSpec:
             name=name,
             chamber=chamber,
             action=action,
+            behavior=behavior,
             target=target,
             min_time_s=min_time_s,
             max_time_s=max_time_s,
@@ -139,11 +162,12 @@ class PhaseSpec:
         return asdict(self)
 
     @staticmethod
-    def from_dict(raw: dict) -> "PhaseSpec":
+    def from_dict(raw: dict) -> PhaseSpec:
         return PhaseSpec(
             name=raw.get("name", "phase"),
             chamber=raw.get("chamber", CHAMBER_AB),
             action=raw.get("action", ACTION_PID_INFLATE),
+            behavior=raw.get("behavior", PNEUMATIC_BEHAVIOR_AUTO),
             target=raw.get("target", raw.get("target_kpa", 0.0)),
             min_time_s=raw.get("min_time_s", raw.get("min_time", 0.3)),
             max_time_s=raw.get("max_time_s", raw.get("max_time", 1.5)),
@@ -476,7 +500,9 @@ class SequenceEngine:
             loop_limit=self.loop_limit,
             loops_done=0,
         )
-        self.log(f"Sequence started. phases={len(self.phases)} loop_limit={self.loop_limit or 'inf'}")
+        self.log(
+            f"Sequence started. phases={len(self.phases)} loop_limit={self.loop_limit or 'inf'}"
+        )
 
     def pause(self) -> None:
         if not self.snapshot.running or self.snapshot.paused:
@@ -529,21 +555,37 @@ class SequenceEngine:
 
     def _apply_phase_command(self, phase: PhaseSpec) -> float:
         chamber = int(phase.chamber)
-        self.bot.set_chamber(chamber)
-
         target_value = float(phase.target)
         if phase.action == ACTION_PID_INFLATE:
             target_value = abs(target_value)
-            self.bot.inflate(target_value)
+            self.bot.send_pneumatic_command(
+                mode=MODE_PID_INFLATE,
+                chamber_mask=chamber,
+                target=target_value,
+                behavior=int(phase.behavior),
+            )
         elif phase.action == ACTION_PID_SUCTION:
             target_value = -abs(target_value)
-            self.bot.suction(target_value)
+            self.bot.send_pneumatic_command(
+                mode=MODE_PID_SUCTION,
+                chamber_mask=chamber,
+                target=target_value,
+                behavior=int(phase.behavior),
+            )
         elif phase.action == ACTION_PWM_INFLATE:
             target_value = max(0.0, min(255.0, abs(target_value)))
-            self.bot.set_pwm(target_value, MODE_PWM_INFLATE)
+            self.bot.direct_command(
+                mode=MODE_PWM_INFLATE,
+                chamber_mask=chamber,
+                target=target_value,
+            )
         elif phase.action == ACTION_PWM_SUCTION:
             target_value = max(0.0, min(255.0, abs(target_value)))
-            self.bot.set_pwm(target_value, MODE_PWM_SUCTION)
+            self.bot.direct_command(
+                mode=MODE_PWM_SUCTION,
+                chamber_mask=chamber,
+                target=target_value,
+            )
         elif phase.action == ACTION_VENT:
             target_value = 0.0
             self.bot.vent(chamber_id=chamber, duration_s=None)
@@ -623,6 +665,7 @@ class SequenceEngine:
             self.log(
                 f"Phase {self._phase_index + 1}/{len(self.phases)}: {phase.name} | "
                 f"{ACTION_LABELS.get(phase.action, phase.action)} | "
+                f"beh={BEHAVIOR_LABELS.get(int(phase.behavior), phase.behavior)} | "
                 f"ch={phase.chamber} target={command_target:.2f}"
             )
 
@@ -963,6 +1006,12 @@ class LocomotionGUI(QtWidgets.QMainWindow):
         for label, value in ACTION_OPTIONS:
             self.combo_manual_action.addItem(label, value)
 
+        self.combo_manual_behavior = QtWidgets.QComboBox()
+        for label, value in BEHAVIOR_OPTIONS:
+            self.combo_manual_behavior.addItem(label, value)
+        default_behavior_idx = self.combo_manual_behavior.findData(PNEUMATIC_BEHAVIOR_AUTO)
+        self.combo_manual_behavior.setCurrentIndex(max(0, default_behavior_idx))
+
         self.spin_manual_value = QtWidgets.QDoubleSpinBox()
         self.spin_manual_value.setRange(-255.0, 255.0)
         self.spin_manual_value.setDecimals(2)
@@ -973,6 +1022,7 @@ class LocomotionGUI(QtWidgets.QMainWindow):
 
         form.addRow("Chamber", self.combo_manual_chamber)
         form.addRow("Action", self.combo_manual_action)
+        form.addRow("Behavior", self.combo_manual_behavior)
         form.addRow("Value", self.spin_manual_value)
         form.addRow(self.btn_manual_send)
         return box
@@ -1032,13 +1082,14 @@ class LocomotionGUI(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(box)
         layout.setSpacing(8)
 
-        self.table = QtWidgets.QTableWidget(0, 10)
+        self.table = QtWidgets.QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels(
             [
                 "On",
                 "Name",
                 "Chamber",
                 "Action",
+                "Behavior",
                 "Target",
                 "Min s",
                 "Max s",
@@ -1062,6 +1113,7 @@ class LocomotionGUI(QtWidgets.QMainWindow):
         header.setSectionResizeMode(COL_NAME, QtWidgets.QHeaderView.Stretch)
         header.setSectionResizeMode(COL_CHAMBER, QtWidgets.QHeaderView.ResizeToContents)
         header.setSectionResizeMode(COL_ACTION, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_BEHAVIOR, QtWidgets.QHeaderView.ResizeToContents)
         for idx in (COL_TARGET, COL_MIN, COL_MAX, COL_TOL, COL_SETTLE, COL_SNAP):
             header.setSectionResizeMode(idx, QtWidgets.QHeaderView.ResizeToContents)
 
@@ -1177,6 +1229,13 @@ class LocomotionGUI(QtWidgets.QMainWindow):
         action_combo.setCurrentIndex(max(0, action_index))
         self.table.setCellWidget(row, COL_ACTION, action_combo)
 
+        behavior_combo = QtWidgets.QComboBox()
+        for label, value in BEHAVIOR_OPTIONS:
+            behavior_combo.addItem(label, value)
+        behavior_index = behavior_combo.findData(phase.behavior)
+        behavior_combo.setCurrentIndex(max(0, behavior_index))
+        self.table.setCellWidget(row, COL_BEHAVIOR, behavior_combo)
+
         self.table.setItem(row, COL_TARGET, self._numeric_item(phase.target))
         self.table.setItem(row, COL_MIN, self._numeric_item(phase.min_time_s))
         self.table.setItem(row, COL_MAX, self._numeric_item(phase.max_time_s))
@@ -1210,16 +1269,19 @@ class LocomotionGUI(QtWidgets.QMainWindow):
 
         chamber_combo = self.table.cellWidget(row, COL_CHAMBER)
         action_combo = self.table.cellWidget(row, COL_ACTION)
-        if chamber_combo is None or action_combo is None:
+        behavior_combo = self.table.cellWidget(row, COL_BEHAVIOR)
+        if chamber_combo is None or action_combo is None or behavior_combo is None:
             raise ValueError(f"Row {row + 1}: missing combo widget")
 
         chamber = int(chamber_combo.currentData())
         action = str(action_combo.currentData())
+        behavior = int(behavior_combo.currentData())
 
         phase = PhaseSpec(
             name=read_text(COL_NAME, f"phase_{row + 1}"),
             chamber=chamber,
             action=action,
+            behavior=behavior,
             target=read_float(COL_TARGET, 0.0, strict_parse=strict_values),
             min_time_s=read_float(COL_MIN, 0.2, strict_parse=strict_values),
             max_time_s=read_float(COL_MAX, 1.5, strict_parse=strict_values),
@@ -1384,7 +1446,7 @@ class LocomotionGUI(QtWidgets.QMainWindow):
             return
 
         try:
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 payload = json.load(handle)
             phases_raw = payload.get("phases", [])
             if not phases_raw:
@@ -1424,6 +1486,7 @@ class LocomotionGUI(QtWidgets.QMainWindow):
 
         chamber = int(self.combo_manual_chamber.currentData())
         action = str(self.combo_manual_action.currentData())
+        behavior = int(self.combo_manual_behavior.currentData())
         value = float(self.spin_manual_value.value())
 
         try:
@@ -1431,6 +1494,7 @@ class LocomotionGUI(QtWidgets.QMainWindow):
                 name="manual",
                 chamber=chamber,
                 action=action,
+                behavior=behavior,
                 target=value,
                 min_time_s=0.0,
                 max_time_s=0.2,
@@ -1439,7 +1503,9 @@ class LocomotionGUI(QtWidgets.QMainWindow):
             target_applied = self.engine._apply_phase_command(phase)
             self._append_log(
                 "Manual command sent: "
-                f"{ACTION_LABELS.get(action, action)} ch={chamber} value={target_applied:.2f}"
+                f"{ACTION_LABELS.get(action, action)} "
+                f"beh={BEHAVIOR_LABELS.get(behavior, behavior)} "
+                f"ch={chamber} value={target_applied:.2f}"
             )
         except Exception as exc:
             self._show_error(f"Manual command failed: {exc}")
@@ -1496,9 +1562,8 @@ class LocomotionGUI(QtWidgets.QMainWindow):
             state = "IDLE"
 
         self.label_status.setText(state)
-        self.label_phase.setText(
-            f"{snapshot.phase_index + 1 if snapshot.phase_index >= 0 else '-'} | {snapshot.phase_name}"
-        )
+        phase_idx = snapshot.phase_index + 1 if snapshot.phase_index >= 0 else "-"
+        self.label_phase.setText(f"{phase_idx} | {snapshot.phase_name}")
         loop_text = "inf" if snapshot.loop_limit == 0 else str(snapshot.loop_limit)
         self.label_loop.setText(f"{snapshot.loops_done}/{loop_text}")
         self.label_pressure.setText(f"{snapshot.pressure_kpa:.2f} kPa")

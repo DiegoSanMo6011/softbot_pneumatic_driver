@@ -1032,9 +1032,7 @@ class PumpEvalGUI(QtWidgets.QMainWindow):
             self.card_settling_pressure.setText(
                 self._fmt_num(payload.get("settling_pressure_s"), " s")
             )
-            self.card_settling_vacuum.setText(
-                self._fmt_num(payload.get("settling_vacuum_s"), " s")
-            )
+            self.card_settling_vacuum.setText(self._fmt_num(payload.get("settling_vacuum_s"), " s"))
             valid = bool(payload.get("valid", False))
             self.card_apta.setText("APTA" if valid else "NO_APTA")
             return

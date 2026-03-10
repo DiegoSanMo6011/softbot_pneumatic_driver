@@ -31,4 +31,6 @@ Core commands:
 
 Notes:
 - Camera selection uses bitmask values `1..7` (`A=1`, `B=2`, `C=4`).
+- The operational control path is `/pneumatic_command` + `/pneumatic_state`.
+- `labctl hardware verify` now checks both `/system_debug` and `/pneumatic_state`.
 - Hardware component `valve_chamber_c` maps to the legacy BOOST electrical pin.

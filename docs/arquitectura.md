@@ -1,75 +1,89 @@
-# Arquitectura de Control y Comunicación
+# Arquitectura de control y comunicación
 
 ## 1. Vista general
 El sistema está dividido en dos capas:
-- **Capa embebida (ESP32 + micro-ROS):** controla bombas, válvulas y seguridad crítica.
-- **Capa de alto nivel (PC/ROS 2):** planificación, experimentación, tuning y GUI.
 
-## 2. Hardware base
-- MCU: **ESP32**
-- Sensor: **ADS1115** (I2C, 16-bit) con sensor de presión analógico
-- Actuadores: bombas de inflado y succión + válvulas direccionales
-- Selección neumática:
-  - `MUX A` (pin dedicado)
-  - `MUX B` (pin dedicado)
-  - `Válvula Cámara C` (pin legacy BOOST)
+- **Capa embebida (ESP32 + micro-ROS):** control en tiempo real de bombas, válvulas,
+  sensores y seguridad.
+- **Capa de alto nivel (PC/ROS 2):** GUI, secuencias de locomoción, benchmark, tuning
+  y operación diaria.
 
-## 3. Selección de cámara por bitmask
-El tópico `/active_chamber` usa `std_msgs/Int8` con máscara de 3 bits:
+La ruta operativa vigente usa un **protocolo atómico** para mandar comandos neumáticos,
+evitando el problema histórico de publicar cámara, modo y setpoint por tópicos separados.
 
-- bit 0 (`1`): cámara A
-- bit 1 (`2`): cámara B
-- bit 2 (`4`): cámara C
+## 2. Componentes principales
+- **ESP32** con firmware en `firmware/softbot_controller/softbot_controller.ino`
+- **ADS1115** con dos canales activos:
+  - `Ch0` presión
+  - `Ch1` vacío
+- **Bombas**
+  - 2 de presión en paralelo
+  - 2 de vacío en paralelo
+- **Selección neumática**
+  - `MUX A`
+  - `MUX B`
+  - `Valve Chamber C` sobre el pin legacy BOOST
 
-Combinaciones válidas:
-- `0`: bloqueado
-- `1`: A
-- `2`: B
-- `3`: A+B
-- `4`: C
-- `5`: A+C
-- `6`: B+C
-- `7`: A+B+C
+## 3. Contrato ROS 2 vigente
+Los tópicos de control/estado se documentan completos en:
 
-Regla especial en modo `VENT`:
-- Si llega `active_chamber=0`, el firmware ventea `A+B+C` (`mask=7`).
+```text
+docs/protocolo_neumatico_atomico.md
+```
 
-## 4. Tópicos ROS 2
-| Tópico | Tipo | Descripción |
+Resumen operativo:
+
+| Tópico | Tipo | Uso |
 | --- | --- | --- |
-| `/active_chamber` | `std_msgs/Int8` | Bitmask 0..7 (A/B/C y combinaciones) |
-| `/pressure_mode` | `std_msgs/Int8` | 1: PID inflado, -1: PID succión, 2: PWM inflado, -2: PWM succión, 4: venteo, 9: diagnóstico de hardware |
-| `/pressure_setpoint` | `std_msgs/Float32` | Setpoint (kPa o PWM según modo) |
-| `/sensor/pressure` | `std_msgs/Float32` | Sensor ADS1115 Ch0 (kPa) |
-| `/sensor/vacuum` | `std_msgs/Float32` | Sensor ADS1115 Ch1 (kPa) |
-| `/system_debug` | `std_msgs/Int16MultiArray` | [PWM_main, PWM_aux, ch0*10, ch1*10, mode, flags] |
-| `/tuning_params` | `std_msgs/Float32MultiArray` | [Kp_pos, Ki_pos, Kp_neg, Ki_neg, max_safe, min_safe] |
-| `/hardware_test` | `std_msgs/Int16` | Bitmask de salidas para modo 9 (bombas/válvulas/mux) |
+| `/pneumatic_command` | `std_msgs/Int16MultiArray` | Comando atómico nuevo |
+| `/pneumatic_state` | `std_msgs/Int16MultiArray` | Estado alto nivel del firmware |
+| `/sensor/pressure` | `std_msgs/Float32` | Presión en kPa |
+| `/sensor/vacuum` | `std_msgs/Float32` | Vacío en kPa |
+| `/system_debug` | `std_msgs/Int16MultiArray` | Debug de bajo nivel |
+| `/tuning_params` | `std_msgs/Float32MultiArray` | Ganancias PI y límites |
+| `/hardware_test` | `std_msgs/Int16` | Diagnóstico por bitmask |
 
-### 4.1 Bitmask de `/hardware_test` (modo 9)
-- bit 0: bomba inflado main
-- bit 1: bomba inflado aux
-- bit 2: bomba succión main
-- bit 3: bomba succión aux
-- bit 4: válvula inflado
-- bit 5: válvula succión
-- bit 6: válvula cámara C (pin legacy BOOST)
-- bit 7: mux cámara A
-- bit 8: mux cámara B
+Tópicos legacy mantenidos temporalmente:
 
-## 5. Seguridad
-- Límites dinámicos de presión (max_safe, min_safe)
-- E-STOP inmediato ante sobrepresión
-- Reset de integradores al cambiar modo
+- `/active_chamber`
+- `/pressure_mode`
+- `/pressure_setpoint`
 
-## 6. Firmware
-Código principal:
-```
-firmware/softbot_controller/softbot_controller.ino
+Esos tópicos están **deprecated** y el firmware los interpreta solo como comportamiento `DIRECT`.
+
+## 4. Máquina de estados neumática
+El firmware usa la siguiente secuencia:
+
+```text
+IDLE -> PRECHARGE -> READY_HOLD -> DELIVER
+  ^         |            |            |
+  |         +----> FAULT +----FIRE----+
+  +---------------- STOP / VENT ------+
 ```
 
-## 7. SDK
-Interfaz Python:
-```
-software/sdk/softbot_interface.py
-```
+Interpretación:
+
+- `PRECHARGE`: la línea de presión o vacío se construye upstream del manifold.
+- `READY_HOLD`: la línea queda lista y sostenida, todavía sin abrir hacia cámaras.
+- `DELIVER`: se abre la válvula de modo y la máscara de cámaras pedida.
+- `DIRECT`: bypass de precarga para compatibilidad legacy o PWM.
+- `FAULT`: timeout o safety break.
+
+## 5. Selección de cámaras
+La selección sigue siendo bitmask `0..7`:
+
+- `1` = A
+- `2` = B
+- `4` = C
+- combinaciones por OR (`3`, `5`, `6`, `7`)
+
+Notas:
+
+- `0` significa bloqueado en comandos normales.
+- En `VENT`, una máscara `0` se interpreta como `ABC`.
+
+## 6. Seguridad
+- Límites dinámicos `max_safe` / `min_safe` siguen entrando por `/tuning_params`.
+- Si la presión fuente sale del rango seguro, el firmware activa `FAULT` y deja trazabilidad en
+  `/system_debug` y `/pneumatic_state`.
+- El estado de emergencia queda latched hasta recibir `STOP`.

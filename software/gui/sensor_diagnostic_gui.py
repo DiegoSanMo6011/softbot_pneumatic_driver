@@ -13,9 +13,9 @@ import time
 from collections import deque
 
 try:
-    from PySide6 import QtCore, QtGui, QtWidgets
+    from PySide6 import QtCore, QtWidgets
 except Exception:
-    from PyQt5 import QtCore, QtGui, QtWidgets
+    from PyQt5 import QtCore, QtWidgets
 
 import rclpy
 
@@ -155,9 +155,7 @@ class PressureGauge(QtWidgets.QFrame):
             self._min_val = val
         if self._max_val is None or val > self._max_val:
             self._max_val = val
-        self.min_max_label.setText(
-            f"Min: {self._min_val:+.2f} / Max: {self._max_val:+.2f}"
-        )
+        self.min_max_label.setText(f"Min: {self._min_val:+.2f} / Max: {self._max_val:+.2f}")
 
     def reset_minmax(self):
         self._min_val = None
@@ -285,16 +283,16 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
         action_layout.addSpacing(12)
 
         self.btn_all_off = QtWidgets.QPushButton("⏹  TODO OFF")
-        self.btn_all_off.setStyleSheet(f"""
-            QPushButton {{
+        self.btn_all_off.setStyleSheet("""
+            QPushButton {
                 background: #b71c1c;
                 color: white;
                 border-radius: 8px;
                 padding: 12px;
                 font-weight: 700;
                 font-size: 14px;
-            }}
-            QPushButton:hover {{ background: #d32f2f; }}
+            }
+            QPushButton:hover { background: #d32f2f; }
         """)
         action_layout.addWidget(self.btn_all_off)
 
@@ -317,7 +315,13 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
         self.lbl_mask = QtWidgets.QLabel("Mask: 0")
         self.lbl_mask.setStyleSheet("font-family: monospace;")
 
-        for lbl in (self.lbl_pwm_main, self.lbl_pwm_aux, self.lbl_flags, self.lbl_mode, self.lbl_mask):
+        for lbl in (
+            self.lbl_pwm_main,
+            self.lbl_pwm_aux,
+            self.lbl_flags,
+            self.lbl_mode,
+            self.lbl_mask,
+        ):
             lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px; font-family: monospace;")
             debug_layout.addWidget(lbl)
 
@@ -350,23 +354,23 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
         """Build bitmask from the toggle buttons."""
         mask = 0
         if self.btn_inflate_main.isChecked():
-            mask |= (1 << 0)
+            mask |= 1 << 0
         if self.btn_inflate_aux.isChecked():
-            mask |= (1 << 1)
+            mask |= 1 << 1
         if self.btn_suction_main.isChecked():
-            mask |= (1 << 2)
+            mask |= 1 << 2
         if self.btn_suction_aux.isChecked():
-            mask |= (1 << 3)
+            mask |= 1 << 3
         if self.btn_valve_inflate.isChecked():
-            mask |= (1 << 4)
+            mask |= 1 << 4
         if self.btn_valve_suction.isChecked():
-            mask |= (1 << 5)
+            mask |= 1 << 5
         if self.btn_valve_chamber_c.isChecked():
-            mask |= (1 << 6)
+            mask |= 1 << 6
         if self.btn_mux_a.isChecked():
-            mask |= (1 << 7)
+            mask |= 1 << 7
         if self.btn_mux_b.isChecked():
-            mask |= (1 << 8)
+            mask |= 1 << 8
         return mask
 
     def _apply_current_state(self):
@@ -382,10 +386,15 @@ class SensorDiagnosticGUI(QtWidgets.QMainWindow):
     def _on_all_off(self):
         # Uncheck all toggle buttons
         for btn in (
-            self.btn_inflate_main, self.btn_inflate_aux,
-            self.btn_suction_main, self.btn_suction_aux,
-            self.btn_valve_inflate, self.btn_valve_suction,
-            self.btn_valve_chamber_c, self.btn_mux_a, self.btn_mux_b,
+            self.btn_inflate_main,
+            self.btn_inflate_aux,
+            self.btn_suction_main,
+            self.btn_suction_aux,
+            self.btn_valve_inflate,
+            self.btn_valve_suction,
+            self.btn_valve_chamber_c,
+            self.btn_mux_a,
+            self.btn_mux_b,
         ):
             btn.blockSignals(True)
             btn.setChecked(False)

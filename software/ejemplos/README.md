@@ -12,4 +12,5 @@ Notas:
 - `02_Identificacion_Sistema.py`: barrido multi-escalón.
 - `02a_Identificacion_Escalon_Simple.py`: escalón único.
 - `08_boost_test.py`: prueba de habilitación de Cámara C (pin legacy BOOST).
-- `09_tank_fill.py`: prueba secuencial de máscaras de cámara A/B/C.
+- `09_tank_fill.py`: nombre histórico; hoy ejecuta una prueba secuencial de máscaras
+  A/B/C sobre la arquitectura sin tanque.

@@ -18,6 +18,12 @@ import tty
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import rclpy
 
+from sdk.protocol import (
+    CHAMBER_AB,
+    MODE_PID_INFLATE,
+    MODE_PID_SUCTION,
+    PNEUMATIC_BEHAVIOR_AUTO,
+)
 from sdk.softbot_interface import SoftBot
 
 msg = """
@@ -202,8 +208,12 @@ class AutoSingleMoveSequencer:
                     f"Obj {self.P_SUCCION:.1f} kPa | "
                     f"MIN {self.MIN_SUCCION:.2f}s | MAX {self.T_SUCCION_MAX:.2f}s"
                 )
-                self.bot.set_chamber(3)
-                self.bot.suction(self.P_SUCCION)
+                self.bot.send_pneumatic_command(
+                    mode=MODE_PID_SUCTION,
+                    chamber_mask=CHAMBER_AB,
+                    target=self.P_SUCCION,
+                    behavior=PNEUMATIC_BEHAVIOR_AUTO,
+                )
                 self.first_run = False
                 self._reset_within()
 
@@ -231,8 +241,12 @@ class AutoSingleMoveSequencer:
                     f"Obj {self.P_INFLADO:.1f} kPa | "
                     f"MIN {self.MIN_INFLADO:.2f}s | MAX {self.T_INFLADO_MAX:.2f}s"
                 )
-                self.bot.set_chamber(3)
-                self.bot.inflate(self.P_INFLADO)
+                self.bot.send_pneumatic_command(
+                    mode=MODE_PID_INFLATE,
+                    chamber_mask=CHAMBER_AB,
+                    target=self.P_INFLADO,
+                    behavior=PNEUMATIC_BEHAVIOR_AUTO,
+                )
                 self.first_run = False
                 self._reset_within()
 
@@ -259,7 +273,7 @@ if __name__ == "__main__":
         bot = SoftBot()
         seq = AutoSingleMoveSequencer(bot)
 
-        bot.set_chamber(3)
+        bot.set_chamber(CHAMBER_AB)
         bot.stop()
 
         print(msg)

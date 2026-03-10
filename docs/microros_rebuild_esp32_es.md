@@ -8,14 +8,14 @@ La librería precompilada de `micro_ros_arduino` para ESP32 puede venir con:
 
 - `RMW_UXRCE_MAX_SUBSCRIPTIONS=5`
 
-El firmware de este proyecto usa 6 suscripciones:
+El firmware vigente usa 6 suscripciones:
 
 1. `/pressure_setpoint`
 2. `/pressure_mode`
 3. `/active_chamber`
 4. `/tuning_params`
-5. `/boost_valve`
-6. `/hardware_test`
+5. `/hardware_test`
+6. `/pneumatic_command`
 
 Cuando el límite es 5, la inicialización del nodo puede fallar parcial o totalmente y romper el pipeline de tópicos.
 
@@ -62,8 +62,7 @@ Debe salir todo en `OK`, incluyendo:
 
 - `command_types`
 - `command_subscribers`
-
-y una muestra válida en:
+- muestra valida en `/pneumatic_state`
 
 - `/system_debug`
 

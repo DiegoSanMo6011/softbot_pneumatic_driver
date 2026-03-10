@@ -15,6 +15,10 @@ SOFTWARE_ROOT = Path(__file__).resolve().parents[1]
 if str(SOFTWARE_ROOT) not in sys.path:
     sys.path.append(str(SOFTWARE_ROOT))
 
+from sdk.protocol import (  # noqa: E402
+    MODE_PID_INFLATE,
+    PNEUMATIC_BEHAVIOR_AUTO,
+)
 from sdk.softbot_interface import SoftBot  # noqa: E402
 
 
@@ -57,7 +61,12 @@ def main() -> int:
         bot.update_tuning(max_safe=max_kpa, min_safe=min_kpa)
         time.sleep(0.2)
 
-        bot.inflate(test_setpoint)
+        bot.send_pneumatic_command(
+            mode=MODE_PID_INFLATE,
+            chamber_mask=args.chamber,
+            target=test_setpoint,
+            behavior=PNEUMATIC_BEHAVIOR_AUTO,
+        )
         time.sleep(max(0.1, args.hold_s))
 
         state = bot.get_state()

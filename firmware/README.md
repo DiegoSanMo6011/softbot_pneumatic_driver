@@ -1,24 +1,33 @@
 # Firmware (ESP32)
 
-Official board profile: `esp32dev` (ESP32 DevKit v1).
+## Archivo principal
+```text
+firmware/softbot_controller/softbot_controller.ino
+```
 
-## Build with PlatformIO
+## Qué implementa
+- Control PI discreto de presión y vacío.
+- Protocolo atómico `/pneumatic_command`.
+- Telemetría de estado `/pneumatic_state`.
+- Compatibilidad temporal con `/active_chamber`, `/pressure_mode` y `/pressure_setpoint`
+  en modo `DIRECT`.
+- Diagnóstico hardware por `/hardware_test`.
+
+## Build
 ```bash
 ./scripts/labctl firmware build --profile default
 ```
 
-## Flash to board
+## Flash
 ```bash
 ./scripts/labctl firmware flash --profile default --port /dev/ttyUSB0
 ```
 
-## Entry source
-- `firmware/softbot_controller/softbot_controller.ino`
-
-## Rebuild micro-ROS (cuando falte `/hardware_test`)
-```bash
-./scripts/rebuild_microros_esp32.sh --max-subscriptions 8
+## Contrato ROS 2 documentado en
+```text
+docs/protocolo_neumatico_atomico.md
 ```
 
-Guía completa:
-- `docs/microros_rebuild_esp32_es.md`
+## Perfil oficial
+- Board: `esp32dev`
+- Framework: Arduino + micro-ROS

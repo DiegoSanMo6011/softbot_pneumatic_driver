@@ -16,9 +16,11 @@ EXPECTED_TELEMETRY_TOPICS = {
     "/sensor/pressure": "std_msgs/msg/Float32",
     "/sensor/vacuum": "std_msgs/msg/Float32",
     "/system_debug": "std_msgs/msg/Int16MultiArray",
+    "/pneumatic_state": "std_msgs/msg/Int16MultiArray",
 }
 
 EXPECTED_COMMAND_TOPICS = {
+    "/pneumatic_command": "std_msgs/msg/Int16MultiArray",
     "/pressure_mode": "std_msgs/msg/Int8",
     "/pressure_setpoint": "std_msgs/msg/Float32",
     "/active_chamber": "std_msgs/msg/Int8",
@@ -45,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-system-debug-sample",
         action="store_true",
-        help="Skip waiting for /system_debug sample payload",
+        help="Skip waiting for runtime sample payloads (/system_debug and /pneumatic_state)",
     )
     return parser.parse_args()
 
@@ -101,23 +103,35 @@ def wait_for_graph(node: Node, args: argparse.Namespace) -> tuple[bool, dict[str
         rclpy.spin_once(node, timeout_sec=0.2)
 
 
-def wait_for_system_debug_sample(node: Node, timeout_s: float) -> tuple[bool, list[int]]:
-    received: list[int] = []
+def wait_for_runtime_samples(node: Node, timeout_s: float) -> tuple[bool, list[int], list[int]]:
+    debug_sample: list[int] = []
+    pneumatic_sample: list[int] = []
 
-    def _cb(msg: Int16MultiArray) -> None:
-        nonlocal received
-        received = list(msg.data)
+    def _cb_debug(msg: Int16MultiArray) -> None:
+        nonlocal debug_sample
+        debug_sample = list(msg.data)
 
-    subscription = node.create_subscription(Int16MultiArray, "/system_debug", _cb, 10)
+    def _cb_pneumatic(msg: Int16MultiArray) -> None:
+        nonlocal pneumatic_sample
+        pneumatic_sample = list(msg.data)
+
+    debug_subscription = node.create_subscription(Int16MultiArray, "/system_debug", _cb_debug, 10)
+    pneumatic_subscription = node.create_subscription(
+        Int16MultiArray,
+        "/pneumatic_state",
+        _cb_pneumatic,
+        10,
+    )
     try:
         deadline = time.monotonic() + max(0.1, float(timeout_s))
         while time.monotonic() < deadline:
-            if received:
-                return True, received
+            if debug_sample and pneumatic_sample:
+                return True, debug_sample, pneumatic_sample
             rclpy.spin_once(node, timeout_sec=0.1)
-        return False, received
+        return False, debug_sample, pneumatic_sample
     finally:
-        node.destroy_subscription(subscription)
+        node.destroy_subscription(debug_subscription)
+        node.destroy_subscription(pneumatic_subscription)
 
 
 def system_debug_schema_ok(sample: list[int]) -> tuple[bool, str]:
@@ -131,6 +145,27 @@ def system_debug_schema_ok(sample: list[int]) -> tuple[bool, str]:
     if mode not in (-2, -1, 0, 1, 2, 4, 9):
         return False, f"mode inesperado: {mode}"
     if flags < 0 or flags > 1024:
+        return False, f"flags fuera de rango: {flags}"
+    return True, "ok"
+
+
+def pneumatic_state_schema_ok(sample: list[int]) -> tuple[bool, str]:
+    if len(sample) != 10:
+        return False, f"expected 10 items, got {len(sample)}"
+    version, state, mode, behavior, requested, applied, flags, _target, _source, _token = sample
+    if version != 1:
+        return False, f"version inesperada: {version}"
+    if state not in range(0, 7):
+        return False, f"state inesperado: {state}"
+    if mode not in (-2, -1, 0, 1, 2, 4, 9):
+        return False, f"mode inesperado: {mode}"
+    if behavior not in (0, 1, 2, 3):
+        return False, f"behavior inesperado: {behavior}"
+    if requested < 0 or requested > 7:
+        return False, f"requested_chamber_mask fuera de rango: {requested}"
+    if applied < 0 or applied > 7:
+        return False, f"applied_chamber_mask fuera de rango: {applied}"
+    if flags < 0 or flags > 4096:
         return False, f"flags fuera de rango: {flags}"
     return True, "ok"
 
@@ -161,26 +196,42 @@ def main() -> int:
             return 1
 
         if args.no_system_debug_sample:
-            print("[OK] /system_debug sample check: skipped")
+            print("[OK] runtime sample checks: skipped")
             return 0
 
-        sample_ok, sample = wait_for_system_debug_sample(node, timeout_s=args.sample_timeout_s)
+        sample_ok, debug_sample, pneumatic_sample = wait_for_runtime_samples(
+            node,
+            timeout_s=args.sample_timeout_s,
+        )
         if not sample_ok:
-            print(f"[FAIL] /system_debug sample: timeout ({args.sample_timeout_s:.1f}s)")
+            print(f"[FAIL] runtime samples: timeout ({args.sample_timeout_s:.1f}s)")
+            print(f"[info] /system_debug recibido: {debug_sample}")
+            print(f"[info] /pneumatic_state recibido: {pneumatic_sample}")
             print(
-                "[hint] El tópico puede existir sin tráfico si el firmware "
+                "[hint] Los tópicos pueden existir sin tráfico si el firmware "
                 "no está ejecutando controlLoop."
             )
             return 1
 
-        schema_ok, schema_msg = system_debug_schema_ok(sample)
-        if not schema_ok:
-            print(f"[FAIL] /system_debug schema: {schema_msg}")
-            print(f"[info] payload recibido: {sample}")
+        debug_schema_ok, debug_schema_msg = system_debug_schema_ok(debug_sample)
+        if not debug_schema_ok:
+            print(f"[FAIL] /system_debug schema: {debug_schema_msg}")
+            print(f"[info] payload recibido: {debug_sample}")
             return 1
 
-        print(f"[OK] /system_debug sample: {sample}")
+        pneumatic_schema_ok, pneumatic_schema_msg = pneumatic_state_schema_ok(pneumatic_sample)
+        if not pneumatic_schema_ok:
+            print(f"[FAIL] /pneumatic_state schema: {pneumatic_schema_msg}")
+            print(f"[info] payload recibido: {pneumatic_sample}")
+            return 1
+
+        print(f"[OK] /system_debug sample: {debug_sample}")
         print("[OK] /system_debug schema: [pwm_main,pwm_aux,ch0_x10,ch1_x10,mode,flags]")
+        print(f"[OK] /pneumatic_state sample: {pneumatic_sample}")
+        print(
+            "[OK] /pneumatic_state schema: "
+            "[version,state,mode,behavior,requested,applied,flags,target,source,token]"
+        )
         return 0
     finally:
         node.destroy_node()

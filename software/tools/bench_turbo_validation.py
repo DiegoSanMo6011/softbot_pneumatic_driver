@@ -25,7 +25,11 @@ SOFTWARE_ROOT = os.path.join(REPO_ROOT, "software")
 if SOFTWARE_ROOT not in os.sys.path:
     os.sys.path.append(SOFTWARE_ROOT)
 
-from sdk.protocol import CHAMBER_ABC  # noqa: E402
+from sdk.protocol import (  # noqa: E402
+    CHAMBER_ABC,
+    MODE_PID_INFLATE,
+    PNEUMATIC_BEHAVIOR_AUTO,
+)
 from sdk.softbot_interface import SoftBot  # noqa: E402
 
 
@@ -144,7 +148,12 @@ def collect_run(
     baseline = float(pre_state["control_pressure_kpa"])
 
     if mode == "pid":
-        bot.inflate(target_kpa)
+        bot.send_pneumatic_command(
+            mode=MODE_PID_INFLATE,
+            chamber_mask=chamber,
+            target=target_kpa,
+            behavior=PNEUMATIC_BEHAVIOR_AUTO,
+        )
     else:
         raise ValueError(f"Unsupported mode: {mode}")
 

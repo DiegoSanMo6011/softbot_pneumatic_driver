@@ -55,6 +55,14 @@ from sdk.protocol import (  # noqa: E402
     MODE_PWM_SUCTION,
     MODE_STOP,
     MODE_VENT,
+    PNEUMATIC_BEHAVIOR_ARM,
+    PNEUMATIC_BEHAVIOR_AUTO,
+    PNEUMATIC_BEHAVIOR_DIRECT,
+    PNEUMATIC_BEHAVIOR_FIRE,
+    PNEUMATIC_BEHAVIOR_LABELS,
+    PNEUMATIC_STATE_LABELS,
+    build_pneumatic_command_payload,
+    decode_pneumatic_state_payload,
 )
 
 LOG_DIR = os.path.join(BASE_DIR, "experiments", "logs")
@@ -66,7 +74,13 @@ MODE_OPTIONS = [
     ("-1 - PID Succión", MODE_PID_SUCTION),
     ("2 - PWM Inflado", MODE_PWM_INFLATE),
     ("-2 - PWM Succión", MODE_PWM_SUCTION),
-    ("9 - Hardware Diag", MODE_HARDWARE_DIAGNOSTIC),
+]
+
+BEHAVIOR_OPTIONS = [
+    ("Direct", PNEUMATIC_BEHAVIOR_DIRECT),
+    ("Auto", PNEUMATIC_BEHAVIOR_AUTO),
+    ("Arm", PNEUMATIC_BEHAVIOR_ARM),
+    ("Fire", PNEUMATIC_BEHAVIOR_FIRE),
 ]
 
 
@@ -78,6 +92,8 @@ class SoftBotNode(Node):
         self.topic_chamber = "/active_chamber"
         self.topic_mode = "/pressure_mode"
         self.topic_setpoint = "/pressure_setpoint"
+        self.topic_pneumatic_command = "/pneumatic_command"
+        self.topic_pneumatic_state = "/pneumatic_state"
         self.topic_tuning = "/tuning_params"
         self.topic_hwtest = "/hardware_test"
         self.topic_sensor_pressure = "/sensor/pressure"
@@ -88,6 +104,11 @@ class SoftBotNode(Node):
         self.pub_chamber = self.create_publisher(Int8, self.topic_chamber, 10)
         self.pub_mode = self.create_publisher(Int8, self.topic_mode, 10)
         self.pub_setpoint = self.create_publisher(Float32, self.topic_setpoint, 10)
+        self.pub_pneumatic_command = self.create_publisher(
+            Int16MultiArray,
+            self.topic_pneumatic_command,
+            10,
+        )
         self.pub_tuning = self.create_publisher(
             Float32MultiArray,
             self.topic_tuning,
@@ -112,6 +133,12 @@ class SoftBotNode(Node):
             Int16MultiArray,
             self.topic_debug,
             self._cb_debug,
+            10,
+        )
+        self.sub_pneumatic_state = self.create_subscription(
+            Int16MultiArray,
+            self.topic_pneumatic_state,
+            self._cb_pneumatic_state,
             10,
         )
         self.sub_setpoint = self.create_subscription(
@@ -143,6 +170,13 @@ class SoftBotNode(Node):
         self.pwm_main = 0
         self.pwm_aux = 0
         self.status_flags = 0
+        self.pneumatic_state = 0
+        self.pneumatic_behavior = PNEUMATIC_BEHAVIOR_DIRECT
+        self.pneumatic_flags = 0
+        self.requested_chamber = 0
+        self.applied_chamber = 0
+        self.command_token = 0
+        self.source_pressure_kpa = 0.0
 
     def _refresh_control_pressure(self):
         if self.mode in (MODE_PID_SUCTION, MODE_PWM_SUCTION):
@@ -178,40 +212,69 @@ class SoftBotNode(Node):
             self.status_flags = int(msg.data[5])
             self._refresh_control_pressure()
 
+    def _cb_pneumatic_state(self, msg: Int16MultiArray):
+        try:
+            frame = decode_pneumatic_state_payload(msg.data)
+        except ValueError:
+            return
+        self.pneumatic_state = int(frame.state)
+        self.pneumatic_behavior = int(frame.behavior)
+        self.pneumatic_flags = int(frame.flags)
+        self.requested_chamber = int(frame.requested_chamber_mask)
+        self.applied_chamber = int(frame.applied_chamber_mask)
+        self.command_token = int(frame.command_token)
+        self.source_pressure_kpa = float(frame.source_pressure_kpa)
+        self.chamber = int(frame.requested_chamber_mask)
+        self.mode = int(frame.mode)
+        self.setpoint = float(frame.target_value)
+        self._refresh_control_pressure()
+
     @staticmethod
     def _valid_chamber(chamber: int) -> bool:
         return chamber in range(0, 8)
 
-    def send_command(self, chamber: int, mode: int, setpoint: float):
+    def send_command(self, chamber: int, mode: int, setpoint: float, behavior: int):
         if not self._valid_chamber(int(chamber)):
             raise ValueError(f"Camara invalida: {chamber}. Usa una mascara valida entre 0 y 7.")
-        self.pub_chamber.publish(Int8(data=int(chamber)))
-        self.pub_mode.publish(Int8(data=int(mode)))
-        self.pub_setpoint.publish(Float32(data=float(setpoint)))
+        payload = build_pneumatic_command_payload(
+            mode=int(mode),
+            chamber_mask=int(chamber),
+            behavior=int(behavior),
+            target=float(setpoint),
+            token=0,
+        )
+        msg = Int16MultiArray()
+        msg.data = payload
+        self.pub_pneumatic_command.publish(msg)
 
     def send_command_reliable(
         self,
         chamber: int,
         mode: int,
         setpoint: float,
+        behavior: int,
         repeats: int = 3,
         interval_ms: int = 30,
     ):
-        self.send_command(chamber, mode, setpoint)
+        self.send_command(chamber, mode, setpoint, behavior)
         for i in range(1, repeats):
             QtCore.QTimer.singleShot(
                 interval_ms * i,
-                lambda c=chamber, m=mode, s=setpoint: self.send_command(c, m, s),
+                lambda c=chamber, m=mode, s=setpoint, b=behavior: self.send_command(c, m, s, b),
             )
 
     def stop(self):
-        self.pub_mode.publish(Int8(data=MODE_STOP))
-        self.pub_setpoint.publish(Float32(data=0.0))
+        self.send_command_reliable(
+            CHAMBER_BLOCKED,
+            MODE_STOP,
+            0.0,
+            PNEUMATIC_BEHAVIOR_DIRECT,
+            repeats=2,
+            interval_ms=20,
+        )
 
     def e_stop(self):
-        self.pub_chamber.publish(Int8(data=CHAMBER_BLOCKED))
-        self.pub_mode.publish(Int8(data=MODE_STOP))
-        self.pub_setpoint.publish(Float32(data=0.0))
+        self.stop()
 
     def update_tuning(self, kp_pos, ki_pos, kp_neg, ki_neg, max_safe, min_safe):
         msg = Float32MultiArray()
@@ -226,7 +289,12 @@ class SoftBotNode(Node):
         self.pub_tuning.publish(msg)
 
     def vent(self, chamber_id: int, duration_ms: int):
-        self.send_command_reliable(chamber_id, MODE_VENT, 0.0)
+        self.send_command_reliable(
+            chamber_id,
+            MODE_VENT,
+            0.0,
+            PNEUMATIC_BEHAVIOR_DIRECT,
+        )
         if duration_ms > 0:
             QtCore.QTimer.singleShot(duration_ms, self.stop)
 
@@ -300,6 +368,10 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         self.combo_mode = QtWidgets.QComboBox()
         self.combo_mode.addItems([label for label, _ in MODE_OPTIONS])
         self.combo_mode.currentIndexChanged.connect(self.on_mode_changed)
+
+        self.combo_behavior = QtWidgets.QComboBox()
+        for label, value in BEHAVIOR_OPTIONS:
+            self.combo_behavior.addItem(label, value)
 
         self.spin_setpoint = QtWidgets.QDoubleSpinBox()
         self.spin_setpoint.setRange(-80.0, 80.0)
@@ -491,6 +563,8 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         control_panel.addWidget(chamber_box)
         control_panel.addWidget(QtWidgets.QLabel("Modo"))
         control_panel.addWidget(self.combo_mode)
+        control_panel.addWidget(QtWidgets.QLabel("Behavior"))
+        control_panel.addWidget(self.combo_behavior)
         control_panel.addWidget(QtWidgets.QLabel("Setpoint (kPa o PWM)"))
         control_panel.addWidget(self.spin_setpoint)
         control_panel.addWidget(btn_send)
@@ -568,17 +642,29 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         mode_txt = MODE_LABELS.get(self.node.mode, str(self.node.mode))
         chamber_mask = int(self.node.chamber) & 0x07
         chamber_txt = self._chamber_mask_label(chamber_mask)
+        pneumatic_state_txt = PNEUMATIC_STATE_LABELS.get(
+            self.node.pneumatic_state, str(self.node.pneumatic_state)
+        )
+        behavior_txt = PNEUMATIC_BEHAVIOR_LABELS.get(
+            self.node.pneumatic_behavior, str(self.node.pneumatic_behavior)
+        )
+        applied_txt = self._chamber_mask_label(int(self.node.applied_chamber) & 0x07)
 
         self.label_status.setText(
+            f"Src={self.node.source_pressure_kpa:.2f} kPa | "
             f"Ctl={self.node.control_pressure_kpa:.2f} kPa | "
             f"Ch0={self.node.sensor_pressure_kpa:.2f} | "
             f"Ch1={self.node.sensor_vacuum_kpa:.2f} | "
             f"SP={self.node.setpoint:.2f} | "
             f"PWM=({self.node.pwm_main},{self.node.pwm_aux}) | "
             f"Mode={self.node.mode} ({mode_txt}) | "
+            f"State={pneumatic_state_txt} | "
+            f"Beh={behavior_txt} | "
             f"Err={error_kpa:.2f} | "
-            f"Flags=0x{self.node.status_flags:02X} | "
-            f"ChMask={chamber_mask} ({chamber_txt})"
+            f"DbgFlags=0x{self.node.status_flags:02X} | "
+            f"PneuFlags=0x{self.node.pneumatic_flags:02X} | "
+            f"Req={chamber_mask} ({chamber_txt}) | "
+            f"App={self.node.applied_chamber} ({applied_txt})"
         )
 
         if self.log_writer:
@@ -624,18 +710,24 @@ class SoftBotGUI(QtWidgets.QMainWindow):
         chamber = self._selected_chamber_mask()
         mode = MODE_OPTIONS[self.combo_mode.currentIndex()][1]
         setpoint = self.spin_setpoint.value()
-        self.node.send_command_reliable(chamber, mode, setpoint)
+        behavior = int(self.combo_behavior.currentData())
+        self.node.send_command_reliable(chamber, mode, setpoint, behavior)
 
     def on_mode_changed(self, index: int):
         mode = MODE_OPTIONS[index][1]
-        if mode in (MODE_PWM_INFLATE, MODE_PWM_SUCTION, MODE_HARDWARE_DIAGNOSTIC):
+        if mode in (MODE_PWM_INFLATE, MODE_PWM_SUCTION):
             # PWM
             self.spin_setpoint.setRange(0.0, 255.0)
             self.spin_setpoint.setDecimals(0)
+            behavior_idx = self.combo_behavior.findData(PNEUMATIC_BEHAVIOR_DIRECT)
+            self.combo_behavior.setCurrentIndex(max(0, behavior_idx))
         else:
             # PID (kPa)
             self.spin_setpoint.setRange(-80.0, 80.0)
             self.spin_setpoint.setDecimals(2)
+            behavior_idx = self.combo_behavior.findData(PNEUMATIC_BEHAVIOR_AUTO)
+            if self.combo_behavior.currentData() == PNEUMATIC_BEHAVIOR_DIRECT:
+                self.combo_behavior.setCurrentIndex(max(0, behavior_idx))
 
     def on_stop(self):
         self.node.stop()

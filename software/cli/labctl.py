@@ -878,10 +878,7 @@ def cmd_tuning_validate(args: argparse.Namespace) -> int:
     if args.tag:
         command.extend(["--tag", str(args.tag)])
 
-    event(
-        "tuning validate "
-        f"baseline={args.baseline_summary} candidate={args.candidate_summary}"
-    )
+    event(f"tuning validate baseline={args.baseline_summary} candidate={args.candidate_summary}")
     run_command(command)
     return 0
 
@@ -970,14 +967,22 @@ def build_parser() -> argparse.ArgumentParser:
         "locomotion",
         help="Start dedicated locomotion sequence studio GUI",
     )
-    gui_locomotion.add_argument("--foreground", action="store_true", help="Run attached to terminal")
+    gui_locomotion.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Run attached to terminal",
+    )
     gui_locomotion.set_defaults(func=cmd_gui_locomotion)
 
     gui_sensor_diag = gui_sub.add_parser(
         "sensor-diag",
         help="Start dual-sensor diagnostic GUI for leak detection",
     )
-    gui_sensor_diag.add_argument("--foreground", action="store_true", help="Run attached to terminal")
+    gui_sensor_diag.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Run attached to terminal",
+    )
     gui_sensor_diag.set_defaults(func=cmd_gui_sensor_diag)
 
     example = sub.add_parser("example", help="Run example scripts")

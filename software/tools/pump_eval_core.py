@@ -29,6 +29,10 @@ from sdk.protocol import (  # noqa: E402
     MODE_PID_SUCTION,
     MODE_PWM_INFLATE,
     MODE_PWM_SUCTION,
+    PNEUMATIC_BEHAVIOR_AUTO,
+    PNEUMATIC_BEHAVIOR_DIRECT,
+    PNEUMATIC_STATE_DELIVER,
+    PNEUMATIC_STATE_DIRECT,
 )
 
 EVENT_PREFIX = "[pump_eval_event]"
@@ -272,6 +276,8 @@ class DemoPump:
         self.mode = "stop"
         self.target = 0.0
         self.pwm = 0
+        self.chamber_mask = CHAMBER_ABC
+        self.behavior = PNEUMATIC_BEHAVIOR_DIRECT
         self.last_t = time.monotonic()
 
     def _step(self) -> None:
@@ -306,7 +312,39 @@ class DemoPump:
         self.pwm = 0
 
     def set_chamber(self, _chamber: int) -> None:
-        return None
+        self.chamber_mask = int(_chamber)
+
+    def send_pneumatic_command(
+        self,
+        *,
+        mode: int,
+        chamber_mask: int,
+        target: float,
+        behavior: int,
+        token: int = 0,
+        repeats: int = 3,
+        interval_s: float = 0.03,
+    ) -> None:
+        del token, repeats, interval_s
+        self.chamber_mask = int(chamber_mask)
+        self.behavior = int(behavior)
+        if mode == MODE_PID_INFLATE:
+            self.inflate(target)
+        elif mode == MODE_PID_SUCTION:
+            self.suction(target)
+        elif mode in (MODE_PWM_INFLATE, MODE_PWM_SUCTION):
+            self.set_pwm(target, mode)
+        else:
+            self.stop()
+
+    def direct_command(self, *, mode: int, chamber_mask: int, target: float, token: int = 0):
+        self.send_pneumatic_command(
+            mode=mode,
+            chamber_mask=chamber_mask,
+            target=target,
+            behavior=PNEUMATIC_BEHAVIOR_DIRECT,
+            token=token,
+        )
 
     def vent(self, chamber_id: int = CHAMBER_ABC, duration_s: float | None = None) -> None:
         del chamber_id
@@ -327,10 +365,12 @@ class DemoPump:
     def inflate(self, pressure_kpa: float) -> None:
         self.mode = PHASE_TARGET_PRESSURE
         self.target = float(pressure_kpa)
+        self.behavior = PNEUMATIC_BEHAVIOR_AUTO
 
     def suction(self, pressure_kpa: float) -> None:
         self.mode = PHASE_TARGET_VACUUM
         self.target = float(pressure_kpa)
+        self.behavior = PNEUMATIC_BEHAVIOR_AUTO
 
     def get_state(self) -> dict[str, float | int]:
         self._step()
@@ -341,7 +381,9 @@ class DemoPump:
         elif self.mode in (PHASE_CAP_PRESSURE, PHASE_TARGET_PRESSURE):
             sensor_pressure = float(self.pressure)
             sensor_vacuum = 0.0
-            logic_state = MODE_PID_INFLATE if self.mode == PHASE_TARGET_PRESSURE else MODE_PWM_INFLATE
+            logic_state = (
+                MODE_PID_INFLATE if self.mode == PHASE_TARGET_PRESSURE else MODE_PWM_INFLATE
+            )
         else:
             sensor_pressure = float(self.pressure)
             sensor_vacuum = 0.0
@@ -354,6 +396,15 @@ class DemoPump:
             "pwm_aux": int(self.pwm),
             "logic_state": int(logic_state),
             "status_flags": 0,
+            "pneumatic_state": (
+                PNEUMATIC_STATE_DIRECT
+                if self.behavior == PNEUMATIC_BEHAVIOR_DIRECT
+                else PNEUMATIC_STATE_DELIVER
+            ),
+            "requested_chamber_mask": int(self.chamber_mask),
+            "applied_chamber_mask": int(self.chamber_mask),
+            "pneumatic_behavior": int(self.behavior),
+            "pneumatic_target": float(self.target),
         }
 
     def close(self) -> None:
@@ -502,16 +553,34 @@ class PumpEvalRunner:
 
     def _apply_phase_command(self, phase: str) -> None:
         if phase == PHASE_CAP_PRESSURE:
-            self.bot.set_pwm(self.args.pwm_capacity, MODE_PWM_INFLATE)
+            self.bot.direct_command(
+                mode=MODE_PWM_INFLATE,
+                chamber_mask=self.args.chamber,
+                target=self.args.pwm_capacity,
+            )
             return
         if phase == PHASE_TARGET_PRESSURE:
-            self.bot.inflate(self.args.target_pressure_kpa)
+            self.bot.send_pneumatic_command(
+                mode=MODE_PID_INFLATE,
+                chamber_mask=self.args.chamber,
+                target=self.args.target_pressure_kpa,
+                behavior=PNEUMATIC_BEHAVIOR_AUTO,
+            )
             return
         if phase == PHASE_CAP_VACUUM:
-            self.bot.set_pwm(self.args.pwm_capacity, MODE_PWM_SUCTION)
+            self.bot.direct_command(
+                mode=MODE_PWM_SUCTION,
+                chamber_mask=self.args.chamber,
+                target=self.args.pwm_capacity,
+            )
             return
         if phase == PHASE_TARGET_VACUUM:
-            self.bot.suction(self.args.target_vacuum_kpa)
+            self.bot.send_pneumatic_command(
+                mode=MODE_PID_SUCTION,
+                chamber_mask=self.args.chamber,
+                target=self.args.target_vacuum_kpa,
+                behavior=PNEUMATIC_BEHAVIOR_AUTO,
+            )
             return
         raise ValueError(f"Unknown phase: {phase}")
 
@@ -1343,14 +1412,12 @@ def main() -> int:
         print(f"- Overshoot pressure mean: {aggregate.overshoot_pressure_mean_kpa:.3f} kPa")
         print(f"- Overshoot vacuum mean: {aggregate.overshoot_vacuum_mean_kpa:.3f} kPa")
         print(
-            "- Settling pressure mean: "
-            f"{aggregate.settling_pressure_mean_s:.3f} s"
+            f"- Settling pressure mean: {aggregate.settling_pressure_mean_s:.3f} s"
             if aggregate.settling_pressure_mean_s is not None
             else "- Settling pressure mean: N/A"
         )
         print(
-            "- Settling vacuum mean: "
-            f"{aggregate.settling_vacuum_mean_s:.3f} s"
+            f"- Settling vacuum mean: {aggregate.settling_vacuum_mean_s:.3f} s"
             if aggregate.settling_vacuum_mean_s is not None
             else "- Settling vacuum mean: N/A"
         )

@@ -2,7 +2,7 @@
 """
 SoftBot Python Interface (SDK).
 
-Wrapper para SoftBot Pneumatic Driver con control de locomocion,
+Wrapper para SoftBot Pneumatic Driver con protocolo atomico de precarga,
 tuning y diagnostico de hardware.
 """
 
@@ -19,53 +19,106 @@ from std_msgs.msg import Float32, Float32MultiArray, Int8, Int16, Int16MultiArra
 try:
     from .protocol import (
         CHAMBER_ABC,
+        CHAMBER_BLOCKED,
         MODE_HARDWARE_DIAGNOSTIC,
+        MODE_LABELS,
         MODE_PID_INFLATE,
         MODE_PID_SUCTION,
         MODE_PWM_INFLATE,
         MODE_PWM_SUCTION,
         MODE_STOP,
         MODE_VENT,
+        PID_CONTROL_MODES,
+        PNEUMATIC_BEHAVIOR_ARM,
+        PNEUMATIC_BEHAVIOR_AUTO,
+        PNEUMATIC_BEHAVIOR_DIRECT,
+        PNEUMATIC_BEHAVIOR_FIRE,
+        PNEUMATIC_BEHAVIOR_LABELS,
+        PNEUMATIC_FLAG_ARMED,
+        PNEUMATIC_FLAG_COMMAND_REJECTED,
+        PNEUMATIC_FLAG_DELIVERING,
+        PNEUMATIC_FLAG_EMERGENCY_STOP,
+        PNEUMATIC_FLAG_LEGACY_INPUT,
+        PNEUMATIC_FLAG_READY,
+        PNEUMATIC_FLAG_TIMEOUT,
+        PNEUMATIC_STATE_IDLE,
+        PNEUMATIC_STATE_LABELS,
         VALID_CHAMBERS,
+        PneumaticStateFrame,
         build_hardware_mask,
+        build_pneumatic_command_payload,
+        decode_pneumatic_state_payload,
     )
 except ImportError:
     from protocol import (  # type: ignore
         CHAMBER_ABC,
+        CHAMBER_BLOCKED,
         MODE_HARDWARE_DIAGNOSTIC,
+        MODE_LABELS,
         MODE_PID_INFLATE,
         MODE_PID_SUCTION,
         MODE_PWM_INFLATE,
         MODE_PWM_SUCTION,
         MODE_STOP,
         MODE_VENT,
+        PID_CONTROL_MODES,
+        PNEUMATIC_BEHAVIOR_ARM,
+        PNEUMATIC_BEHAVIOR_AUTO,
+        PNEUMATIC_BEHAVIOR_DIRECT,
+        PNEUMATIC_BEHAVIOR_FIRE,
+        PNEUMATIC_BEHAVIOR_LABELS,
+        PNEUMATIC_FLAG_ARMED,
+        PNEUMATIC_FLAG_COMMAND_REJECTED,
+        PNEUMATIC_FLAG_DELIVERING,
+        PNEUMATIC_FLAG_EMERGENCY_STOP,
+        PNEUMATIC_FLAG_LEGACY_INPUT,
+        PNEUMATIC_FLAG_READY,
+        PNEUMATIC_FLAG_TIMEOUT,
+        PNEUMATIC_STATE_IDLE,
+        PNEUMATIC_STATE_LABELS,
         VALID_CHAMBERS,
+        PneumaticStateFrame,
         build_hardware_mask,
+        build_pneumatic_command_payload,
+        decode_pneumatic_state_payload,
     )
+
+
+BEHAVIOR_NAME_TO_ID = {
+    "direct": PNEUMATIC_BEHAVIOR_DIRECT,
+    "auto": PNEUMATIC_BEHAVIOR_AUTO,
+    "arm": PNEUMATIC_BEHAVIOR_ARM,
+    "fire": PNEUMATIC_BEHAVIOR_FIRE,
+}
 
 
 class SoftBot(Node):
     def __init__(self):
         super().__init__("softbot_client_api")
 
-        # Topic names
+        # Topic names.
         self.TOPIC_CHAMBER = "/active_chamber"
         self.TOPIC_MODE = "/pressure_mode"
         self.TOPIC_SETPOINT = "/pressure_setpoint"
+        self.TOPIC_PNEUMATIC_COMMAND = "/pneumatic_command"
+        self.TOPIC_PNEUMATIC_STATE = "/pneumatic_state"
         self.TOPIC_TUNING = "/tuning_params"
         self.TOPIC_HARDWARE_TEST = "/hardware_test"
         self.TOPIC_SENSOR_PRESSURE = "/sensor/pressure"
         self.TOPIC_SENSOR_VACUUM = "/sensor/vacuum"
         self.TOPIC_DEBUG = "/system_debug"
 
-        # Publishers
+        # Publishers.
         self.pub_chamber = self.create_publisher(Int8, self.TOPIC_CHAMBER, 10)
         self.pub_mode = self.create_publisher(Int8, self.TOPIC_MODE, 10)
         self.pub_setpoint = self.create_publisher(Float32, self.TOPIC_SETPOINT, 10)
+        self.pub_pneumatic_command = self.create_publisher(
+            Int16MultiArray, self.TOPIC_PNEUMATIC_COMMAND, 10
+        )
         self.pub_tuning = self.create_publisher(Float32MultiArray, self.TOPIC_TUNING, 10)
         self.pub_hwtest = self.create_publisher(Int16, self.TOPIC_HARDWARE_TEST, 10)
 
-        # Subscribers
+        # Subscribers.
         self.sub_sensor_pressure = self.create_subscription(
             Float32,
             self.TOPIC_SENSOR_PRESSURE,
@@ -84,12 +137,34 @@ class SoftBot(Node):
             self._cb_debug,
             10,
         )
+        self.sub_pneumatic_state = self.create_subscription(
+            Int16MultiArray,
+            self.TOPIC_PNEUMATIC_STATE,
+            self._cb_pneumatic_state,
+            10,
+        )
 
-        # Telemetry state
+        # Telemetry state.
         self.sensor_pressure_kpa = 0.0
         self.sensor_vacuum_kpa = 0.0
         self.debug_vector = [0, 0, 0, 0, 0, 0]
+        self.pneumatic_state = PneumaticStateFrame(
+            version=1,
+            state=PNEUMATIC_STATE_IDLE,
+            mode=MODE_STOP,
+            behavior=PNEUMATIC_BEHAVIOR_DIRECT,
+            requested_chamber_mask=CHAMBER_BLOCKED,
+            applied_chamber_mask=CHAMBER_BLOCKED,
+            flags=0,
+            target_raw=0,
+            source_pressure_raw=0,
+            command_token=0,
+        )
         self._telemetry_lock = threading.Lock()
+
+        # Cached operator context for wrapper-style API.
+        self._legacy_chamber_cache = CHAMBER_BLOCKED
+        self._armed_mode_cache = MODE_PID_INFLATE
 
         # Matches firmware defaults (softbot_controller.ino).
         self.tuning_cache = {
@@ -115,16 +190,23 @@ class SoftBot(Node):
 
     def _cb_sensor_pressure(self, msg):
         with self._telemetry_lock:
-            self.sensor_pressure_kpa = msg.data
+            self.sensor_pressure_kpa = float(msg.data)
 
     def _cb_sensor_vacuum(self, msg):
         with self._telemetry_lock:
-            self.sensor_vacuum_kpa = msg.data
+            self.sensor_vacuum_kpa = float(msg.data)
 
     def _cb_debug(self, msg):
         with self._telemetry_lock:
             if len(msg.data) >= 6:
                 self.debug_vector = list(msg.data)
+
+    def _cb_pneumatic_state(self, msg):
+        with self._telemetry_lock:
+            try:
+                self.pneumatic_state = decode_pneumatic_state_payload(msg.data)
+            except ValueError:
+                return
 
     def _publish_with_retries(
         self,
@@ -135,61 +217,150 @@ class SoftBot(Node):
     ):
         repeats = max(1, int(repeats))
         interval_s = max(0.0, float(interval_s))
-        for i in range(repeats):
+        for idx in range(repeats):
             publisher.publish(msg)
-            if i < repeats - 1:
+            if idx < repeats - 1:
                 time.sleep(interval_s)
 
-    def _send_command_reliable(
+    def _normalize_behavior(self, behavior: str | int) -> int:
+        if isinstance(behavior, str):
+            key = behavior.strip().lower()
+            if key not in BEHAVIOR_NAME_TO_ID:
+                valid = ", ".join(sorted(BEHAVIOR_NAME_TO_ID))
+                raise ValueError(f"Invalid pneumatic behavior '{behavior}'. Valid: {valid}")
+            return BEHAVIOR_NAME_TO_ID[key]
+        return int(behavior)
+
+    def send_pneumatic_command(
         self,
-        chamber_id: int,
+        *,
         mode: int,
-        setpoint: float,
+        chamber_mask: int,
+        target: float,
+        behavior: str | int = PNEUMATIC_BEHAVIOR_AUTO,
+        token: int = 0,
         repeats: int = 3,
         interval_s: float = 0.03,
-    ):
-        chamber_msg = Int8(data=int(chamber_id))
-        mode_msg = Int8(data=int(mode))
-        setpoint_msg = Float32(data=float(setpoint))
+    ) -> list[int]:
+        behavior_id = self._normalize_behavior(behavior)
+        payload = build_pneumatic_command_payload(
+            mode=int(mode),
+            chamber_mask=int(chamber_mask),
+            behavior=behavior_id,
+            target=float(target),
+            token=int(token),
+        )
+        msg = Int16MultiArray()
+        msg.data = payload
+        self._publish_with_retries(self.pub_pneumatic_command, msg, repeats, interval_s)
 
-        repeats = max(1, int(repeats))
-        interval_s = max(0.0, float(interval_s))
-        for i in range(repeats):
-            self.pub_chamber.publish(chamber_msg)
-            self.pub_mode.publish(mode_msg)
-            self.pub_setpoint.publish(setpoint_msg)
-            if i < repeats - 1:
-                time.sleep(interval_s)
+        if behavior_id == PNEUMATIC_BEHAVIOR_ARM and int(mode) in PID_CONTROL_MODES:
+            self._armed_mode_cache = int(mode)
+        return payload
 
-    def _send_mode_setpoint_reliable(
+    def direct_command(
         self,
+        *,
         mode: int,
-        setpoint: float,
+        chamber_mask: int,
+        target: float,
+        token: int = 0,
         repeats: int = 3,
         interval_s: float = 0.03,
-    ):
-        mode_msg = Int8(data=int(mode))
-        setpoint_msg = Float32(data=float(setpoint))
-        self._publish_with_retries(self.pub_mode, mode_msg, repeats, interval_s)
-        self._publish_with_retries(self.pub_setpoint, setpoint_msg, repeats, interval_s)
+    ) -> list[int]:
+        return self.send_pneumatic_command(
+            mode=mode,
+            chamber_mask=chamber_mask,
+            target=target,
+            behavior=PNEUMATIC_BEHAVIOR_DIRECT,
+            token=token,
+            repeats=repeats,
+            interval_s=interval_s,
+        )
 
-    def inflate(self, pressure_kpa):
-        """Activate PID inflation with kPa setpoint."""
-        self._send_mode_setpoint_reliable(MODE_PID_INFLATE, float(pressure_kpa))
+    def arm_inflate(
+        self,
+        pressure_kpa: float,
+        *,
+        chamber_mask: int | None = None,
+        token: int = 0,
+    ) -> list[int]:
+        chamber = self._legacy_chamber_cache if chamber_mask is None else int(chamber_mask)
+        return self.send_pneumatic_command(
+            mode=MODE_PID_INFLATE,
+            chamber_mask=chamber,
+            target=abs(float(pressure_kpa)),
+            behavior=PNEUMATIC_BEHAVIOR_ARM,
+            token=token,
+        )
 
-    def suction(self, pressure_kpa):
-        """Activate PID suction with a negative kPa setpoint."""
-        self._send_mode_setpoint_reliable(MODE_PID_SUCTION, float(pressure_kpa))
+    def arm_suction(
+        self,
+        pressure_kpa: float,
+        *,
+        chamber_mask: int | None = None,
+        token: int = 0,
+    ) -> list[int]:
+        chamber = self._legacy_chamber_cache if chamber_mask is None else int(chamber_mask)
+        return self.send_pneumatic_command(
+            mode=MODE_PID_SUCTION,
+            chamber_mask=chamber,
+            target=-abs(float(pressure_kpa)),
+            behavior=PNEUMATIC_BEHAVIOR_ARM,
+            token=token,
+        )
+
+    def fire(
+        self,
+        *,
+        chamber_mask: int = CHAMBER_BLOCKED,
+        token: int = 0,
+        mode: int | None = None,
+    ) -> list[int]:
+        fire_mode = self._armed_mode_cache if mode is None else int(mode)
+        return self.send_pneumatic_command(
+            mode=fire_mode,
+            chamber_mask=int(chamber_mask),
+            target=0.0,
+            behavior=PNEUMATIC_BEHAVIOR_FIRE,
+            token=token,
+        )
+
+    def inflate(self, pressure_kpa: float):
+        """Activate PID inflation using the cached chamber mask and AUTO behavior."""
+        return self.send_pneumatic_command(
+            mode=MODE_PID_INFLATE,
+            chamber_mask=self._legacy_chamber_cache,
+            target=abs(float(pressure_kpa)),
+            behavior=PNEUMATIC_BEHAVIOR_AUTO,
+        )
+
+    def suction(self, pressure_kpa: float):
+        """Activate PID suction using the cached chamber mask and AUTO behavior."""
+        return self.send_pneumatic_command(
+            mode=MODE_PID_SUCTION,
+            chamber_mask=self._legacy_chamber_cache,
+            target=-abs(float(pressure_kpa)),
+            behavior=PNEUMATIC_BEHAVIOR_AUTO,
+        )
 
     def stop(self):
-        """Stop pumps and valves."""
-        self._send_mode_setpoint_reliable(MODE_STOP, 0.0, repeats=2, interval_s=0.02)
+        """Stop pumps and valves through the atomic command topic."""
+        return self.send_pneumatic_command(
+            mode=MODE_STOP,
+            chamber_mask=CHAMBER_BLOCKED,
+            target=0.0,
+            behavior=PNEUMATIC_BEHAVIOR_DIRECT,
+            repeats=2,
+            interval_s=0.02,
+        )
 
     def set_chamber(self, chamber_id: int):
-        """Select active chamber bitmask (0=blocked, 1=A, 2=B, 4=C, OR-combinations up to 7)."""
+        """Cache and publish the legacy chamber bitmask."""
         chamber_id = int(chamber_id)
         if chamber_id not in VALID_CHAMBERS:
             raise ValueError(f"Invalid chamber {chamber_id}. Valid values: {VALID_CHAMBERS}")
+        self._legacy_chamber_cache = chamber_id
         self._publish_with_retries(
             self.pub_chamber,
             Int8(data=chamber_id),
@@ -198,13 +369,17 @@ class SoftBot(Node):
         )
 
     def set_pwm(self, pwm_val, mode):
-        """Direct open-loop PWM control. mode: 2 inflate, -2 suction."""
+        """Direct open-loop PWM control on the cached chamber mask."""
         mode = int(mode)
         if mode not in (MODE_PWM_INFLATE, MODE_PWM_SUCTION):
             raise ValueError(
                 f"Invalid PWM mode {mode}. Use {MODE_PWM_INFLATE} or {MODE_PWM_SUCTION}."
             )
-        self._send_mode_setpoint_reliable(mode, float(pwm_val))
+        return self.direct_command(
+            mode=mode,
+            chamber_mask=self._legacy_chamber_cache,
+            target=float(pwm_val),
+        )
 
     def set_hardware_test(
         self,
@@ -229,11 +404,11 @@ class SoftBot(Node):
         setpoint_msg = Float32(data=float(pwm))
         mask_msg = Int16(data=int(bitmask))
 
-        for i in range(repeats):
+        for idx in range(repeats):
             self.pub_mode.publish(mode_msg)
             self.pub_setpoint.publish(setpoint_msg)
             self.pub_hwtest.publish(mask_msg)
-            if i < repeats - 1:
+            if idx < repeats - 1:
                 time.sleep(interval_s)
 
     def set_hardware_components(
@@ -315,11 +490,16 @@ class SoftBot(Node):
         self.stop()
 
     def vent(self, chamber_id: int = CHAMBER_ABC, duration_s: float | None = None):
-        """Release pressure to atmosphere."""
+        """Release pressure to atmosphere on the requested chamber bitmask."""
         chamber_id = int(chamber_id)
         if chamber_id not in VALID_CHAMBERS:
             raise ValueError(f"Invalid chamber {chamber_id}. Valid values: {VALID_CHAMBERS}")
-        self._send_command_reliable(chamber_id, MODE_VENT, 0.0)
+        self.send_pneumatic_command(
+            mode=MODE_VENT,
+            chamber_mask=chamber_id,
+            target=0.0,
+            behavior=PNEUMATIC_BEHAVIOR_DIRECT,
+        )
         if duration_s is not None:
             time.sleep(max(0.0, float(duration_s)))
             self.stop()
@@ -347,27 +527,59 @@ class SoftBot(Node):
     def get_state(self):
         """Return current telemetry snapshot."""
         with self._telemetry_lock:
+            frame = self.pneumatic_state
             logic_state = int(self.debug_vector[4])
+            if logic_state == 0 and frame.mode != MODE_STOP:
+                logic_state = int(frame.mode)
             status_flags = int(self.debug_vector[5])
-            control_pressure = (
-                float(self.sensor_vacuum_kpa)
-                if logic_state in (MODE_PID_SUCTION, MODE_PWM_SUCTION)
-                else float(self.sensor_pressure_kpa)
-            )
+            if logic_state in (MODE_PID_SUCTION, MODE_PWM_SUCTION):
+                control_pressure = float(self.sensor_vacuum_kpa)
+            else:
+                control_pressure = float(self.sensor_pressure_kpa)
+
+            pneumatic_flags = int(frame.flags)
             return {
                 "timestamp": time.time(),
                 "sensor_pressure_kpa": float(self.sensor_pressure_kpa),
                 "sensor_vacuum_kpa": float(self.sensor_vacuum_kpa),
                 "control_pressure_kpa": control_pressure,
+                "source_pressure_kpa": float(frame.source_pressure_kpa),
                 "pwm_main": int(self.debug_vector[0]),
                 "pwm_aux": int(self.debug_vector[1]),
                 "logic_state": logic_state,
+                "logic_state_label": MODE_LABELS.get(logic_state, str(logic_state)),
                 "status_flags": status_flags,
+                "pneumatic_state": int(frame.state),
+                "pneumatic_state_label": frame.state_label,
+                "pneumatic_behavior": int(frame.behavior),
+                "pneumatic_behavior_label": frame.behavior_label,
+                "requested_chamber_mask": int(frame.requested_chamber_mask),
+                "applied_chamber_mask": int(frame.applied_chamber_mask),
+                "pneumatic_flags": pneumatic_flags,
+                "pneumatic_target": float(frame.target_value),
+                "command_token": int(frame.command_token),
+                "flag_ready": bool(pneumatic_flags & PNEUMATIC_FLAG_READY),
+                "flag_armed": bool(pneumatic_flags & PNEUMATIC_FLAG_ARMED),
+                "flag_delivering": bool(pneumatic_flags & PNEUMATIC_FLAG_DELIVERING),
+                "flag_timeout": bool(pneumatic_flags & PNEUMATIC_FLAG_TIMEOUT),
+                "flag_command_rejected": bool(pneumatic_flags & PNEUMATIC_FLAG_COMMAND_REJECTED),
+                "flag_emergency_stop": bool(pneumatic_flags & PNEUMATIC_FLAG_EMERGENCY_STOP),
+                "flag_legacy_input": bool(pneumatic_flags & PNEUMATIC_FLAG_LEGACY_INPUT),
+                "debug_mode_label": MODE_LABELS.get(
+                    int(self.debug_vector[4]), str(self.debug_vector[4])
+                ),
+                "behavior_label": PNEUMATIC_BEHAVIOR_LABELS.get(
+                    int(frame.behavior), str(frame.behavior)
+                ),
+                "state_label": PNEUMATIC_STATE_LABELS.get(int(frame.state), str(frame.state)),
             }
 
     def close(self):
         """Cleanup and shutdown."""
-        self.stop()
+        try:
+            self.stop()
+        except Exception:
+            pass
         self._stop_event.set()
         if self._spin_thread.is_alive():
             self._spin_thread.join(timeout=1.0)

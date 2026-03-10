@@ -1,16 +1,17 @@
 /**
- * @file softbot_controller_v16_pi_puro.ino
- * @brief Controlador v16 - PI puro discreto con anti-windup.
+ * @file softbot_controller.ino
+ * @brief Controlador neumático con precarga atómica y compatibilidad legacy.
  * @details
- * - Control PI puro en inflado y succión (sin rama agresiva por umbral).
- * - Anti-windup simétrico con integración condicional y saturación de integrador.
- * - Release automático en succión (histéresis) para evitar sobre-vacío al entrar a PI.
- * - Hardware: 4 Bombas activas.
+ * - Control PI discreto en inflado y succión con anti-windup.
+ * - Protocolo atómico /pneumatic_command con estados PRECHARGE / READY_HOLD / DELIVER.
+ * - Compatibilidad temporal con /active_chamber + /pressure_mode + /pressure_setpoint
+ *   degradada a comportamiento DIRECT.
+ * - Hardware: 4 bombas activas, 2 sensores ADS1115 y 3 salidas de cámara (A/B/C).
  */
 
 #include <Arduino.h>
-#include <math.h>
 #include <Wire.h>
+#include <math.h>
 #include <Adafruit_ADS1X15.h>
 
 #include <micro_ros_arduino.h>
@@ -33,14 +34,11 @@ const int PIN_VALVE_CHAMBER_C = 23; // Legacy BOOST pin reused for chamber C gat
 const int PIN_MUX_CHAMBER_A = 32;
 const int PIN_MUX_CHAMBER_B = 33;
 
-// Bombas
 const int PIN_PUMP_INFLATE_MAIN = 19;
 const int PIN_PUMP_INFLATE_AUX = 4;
-
 const int PIN_PUMP_SUCTION_MAIN = 18;
 const int PIN_PUMP_SUCTION_AUX = 27;
 
-// Canales PWM
 const int CH_INFLATE_MAIN = 0;
 const int CH_SUCCION_MAIN = 1;
 const int CH_SUCCION_AUX = 2;
@@ -51,8 +49,15 @@ const int PWM_RES = 8;
 const int PWM_MAX = 255;
 const int PI_PWM_MAX_INFLATE = 255;
 const int PI_PWM_MAX_SUCTION = 140;
+const int THRESHOLD_AUX_ENABLE = 40;
 
-// Modos de control
+const int PIN_I2C_SDA = 21;
+const int PIN_I2C_SCL = 22;
+const int PIN_LED_STATUS = 2;
+
+// ==========================================
+// 2. PROTOCOLO / MODOS
+// ==========================================
 const int8_t MODE_STOP = 0;
 const int8_t MODE_PID_INFLATE = 1;
 const int8_t MODE_PID_SUCTION = -1;
@@ -61,7 +66,36 @@ const int8_t MODE_PWM_SUCTION = -2;
 const int8_t MODE_VENT = 4;
 const int8_t MODE_HARDWARE_DIAGNOSTIC = 9;
 
-// Bitmask /hardware_test (modo 9)
+const int8_t PNEUMATIC_BEHAVIOR_DIRECT = 0;
+const int8_t PNEUMATIC_BEHAVIOR_AUTO = 1;
+const int8_t PNEUMATIC_BEHAVIOR_ARM = 2;
+const int8_t PNEUMATIC_BEHAVIOR_FIRE = 3;
+
+const int8_t PNEUMATIC_STATE_IDLE = 0;
+const int8_t PNEUMATIC_STATE_DIRECT = 1;
+const int8_t PNEUMATIC_STATE_PRECHARGE = 2;
+const int8_t PNEUMATIC_STATE_READY_HOLD = 3;
+const int8_t PNEUMATIC_STATE_DELIVER = 4;
+const int8_t PNEUMATIC_STATE_VENT = 5;
+const int8_t PNEUMATIC_STATE_FAULT = 6;
+
+const int16_t PNEUMATIC_PROTOCOL_VERSION = 1;
+const size_t PNEUMATIC_COMMAND_LENGTH = 6;
+const size_t PNEUMATIC_STATE_LENGTH = 10;
+const int8_t CHAMBER_MASK_ALL = 0x07;
+
+const uint16_t PNEUMATIC_FLAG_READY = (1 << 0);
+const uint16_t PNEUMATIC_FLAG_ARMED = (1 << 1);
+const uint16_t PNEUMATIC_FLAG_DELIVERING = (1 << 2);
+const uint16_t PNEUMATIC_FLAG_TIMEOUT = (1 << 3);
+const uint16_t PNEUMATIC_FLAG_COMMAND_REJECTED = (1 << 4);
+const uint16_t PNEUMATIC_FLAG_EMERGENCY_STOP = (1 << 5);
+const uint16_t PNEUMATIC_FLAG_LEGACY_INPUT = (1 << 6);
+
+const uint16_t STATUS_FLAG_EMERGENCY_STOP = (1 << 0);
+const uint16_t STATUS_FLAG_DIAGNOSTIC_MODE = (1 << 1);
+const uint16_t STATUS_FLAG_PUBLISH_SOFT_FAILURE = (1 << 2);
+
 const uint16_t HW_PUMP_INFLATE_MAIN = (1 << 0);
 const uint16_t HW_PUMP_INFLATE_AUX = (1 << 1);
 const uint16_t HW_PUMP_SUCTION_MAIN = (1 << 2);
@@ -74,6 +108,46 @@ const uint16_t HW_MUX_CHAMBER_B = (1 << 8);
 
 const uint8_t DIAG_GROUP_MAIN = 1;
 const uint8_t DIAG_GROUP_AUX = 2;
+
+// ==========================================
+// 3. CONTROL / TIEMPOS
+// ==========================================
+float Kp_neg = -75.0f;
+float Ki_neg = -750.0f;
+float Kp_pos = 24.0f;
+float Ki_pos = 1500.0f;
+
+const float TS_SECONDS = 0.020f;
+const int TS_MS = 20;
+const int TELEMETRY_PERIOD_MS = 200;
+
+const float READY_BAND_KPA = 2.0f;
+const uint32_t READY_HOLD_MS = 120;
+const uint32_t PRECHARGE_TIMEOUT_MS = 2500;
+const float READY_RECHARGE_BAND_KPA = 3.0f;
+
+float integral_pos_sum = 0.0f;
+float integral_neg_sum = 0.0f;
+float safety_limit_max = 55.0f;
+float safety_limit_min = -60.0f;
+
+float setpoint_pressure = 0.0f;
+float current_pressure = 0.0f;
+float sensor_pressure_ch0_kpa = 0.0f;
+float sensor_vacuum_ch1_kpa = 0.0f;
+int8_t control_mode = MODE_STOP;
+int8_t active_chamber = 0;
+
+bool emergency_stop_active = false;
+unsigned long last_control_timestamp = 0;
+unsigned long last_telemetry_timestamp = 0;
+uint32_t publish_soft_failures = 0;
+
+Adafruit_ADS1115 ads;
+const float V_OFFSET = 2.5f;
+const float V_SENSITIVITY = 0.02f;
+
+uint16_t hardware_test_mask = 0;
 
 struct PumpOutputConfig {
   uint16_t mask;
@@ -102,49 +176,35 @@ const DigitalOutputConfig DIAG_DIGITAL_OUTPUTS[] = {
     {HW_MUX_CHAMBER_B, PIN_MUX_CHAMBER_B},
 };
 
-const int THRESHOLD_AUX_ENABLE = 40;
+struct PneumaticCommandContext {
+  int8_t mode;
+  int8_t behavior;
+  int8_t requested_chamber_mask;
+  int8_t applied_chamber_mask;
+  float target_value;
+  int16_t target_encoded;
+  int16_t token;
+  bool legacy_input;
+  bool valid;
+};
 
-const int PIN_I2C_SDA = 21;
-const int PIN_I2C_SCL = 22;
-const int PIN_LED_STATUS = 2;
+PneumaticCommandContext current_command = {MODE_STOP, PNEUMATIC_BEHAVIOR_DIRECT, 0, 0, 0.0f, 0, 0,
+                                           false, false};
+PneumaticCommandContext armed_command = {MODE_STOP, PNEUMATIC_BEHAVIOR_ARM, 0, 0, 0.0f, 0, 0,
+                                         false, false};
+bool armed_command_valid = false;
+int8_t pneumatic_state = PNEUMATIC_STATE_IDLE;
+uint32_t pneumatic_state_entered_ms = 0;
+uint32_t pneumatic_ready_since_ms = 0;
+bool pneumatic_timeout_latched = false;
+bool pneumatic_command_rejected_latched = false;
 
-// ==========================================
-// 2. PARÁMETROS DE CONTROL
-// ==========================================
-float Kp_neg = -75.00f;
-float Ki_neg = -750.00f;
-float Kp_pos = 24.0f;
-float Ki_pos = 1500.0f;
-
-const float TS_SECONDS = 0.020f;
-const int TS_MS = 20;
-// Lower telemetry publish rate to improve stability in noisy sensor setups.
-const int TELEMETRY_PERIOD_MS = 200;
-
-float integral_pos_sum = 0.0f;
-float integral_neg_sum = 0.0f;
-float safety_limit_max = 55.0f;
-float safety_limit_min = -60.0f;
-
-float setpoint_pressure = 0.0f;
-float current_pressure = 0.0f;
-float sensor_pressure_ch0_kpa = 0.0f;
-float sensor_vacuum_ch1_kpa = 0.0f;
-int8_t control_mode = 0;
-int8_t active_chamber = 0;
-
-bool emergency_stop_active = false;
-unsigned long last_control_timestamp = 0;
-unsigned long last_telemetry_timestamp = 0;
-
-Adafruit_ADS1115 ads;
-const float V_OFFSET = 2.5f;
-const float V_SENSITIVITY = 0.02f;
-
-uint16_t hardware_test_mask = 0;
+int8_t legacy_requested_chamber = 0;
+int8_t legacy_requested_mode = MODE_STOP;
+float legacy_requested_setpoint = 0.0f;
 
 // ==========================================
-// 3. MICRO-ROS
+// 4. MICRO-ROS
 // ==========================================
 rcl_node_t node;
 rclc_support_t support;
@@ -156,26 +216,50 @@ rcl_subscription_t sub_mode;
 rcl_subscription_t sub_chamber;
 rcl_subscription_t sub_tuning;
 rcl_subscription_t sub_hwtest;
+rcl_subscription_t sub_pneumatic_command;
 
 rcl_publisher_t pub_sensor_pressure;
 rcl_publisher_t pub_sensor_vacuum;
 rcl_publisher_t pub_debug;
+rcl_publisher_t pub_pneumatic_state;
 
 std_msgs__msg__Float32 msg_setpoint;
 std_msgs__msg__Int8 msg_mode;
 std_msgs__msg__Int8 msg_chamber;
 std_msgs__msg__Int16 msg_hwtest;
 std_msgs__msg__Float32MultiArray msg_tuning;
+std_msgs__msg__Int16MultiArray msg_pneumatic_command;
 std_msgs__msg__Float32 msg_sensor_pressure;
 std_msgs__msg__Float32 msg_sensor_vacuum;
 std_msgs__msg__Int16MultiArray msg_debug;
+std_msgs__msg__Int16MultiArray msg_pneumatic_state;
 
 int16_t debug_data[6];
 float tuning_buffer[6];
+int16_t pneumatic_command_buffer[PNEUMATIC_COMMAND_LENGTH];
+int16_t pneumatic_state_data[PNEUMATIC_STATE_LENGTH];
 
-const uint16_t STATUS_FLAG_EMERGENCY_STOP = (1 << 0);
-const uint16_t STATUS_FLAG_DIAGNOSTIC_MODE = (1 << 1);
-const uint16_t STATUS_FLAG_PUBLISH_SOFT_FAILURE = (1 << 2);
+// ==========================================
+// 5. PROTOTIPOS
+// ==========================================
+void stopActuators();
+void resetIntegrators();
+void clearArmedCommand();
+void enterPneumaticState(int8_t new_state);
+void acceptDirectCommand(int8_t mode, int8_t chamber_mask, float target_value, int16_t target_raw,
+                         int16_t token, bool legacy_input);
+void acceptPrechargeCommand(int8_t mode, int8_t behavior, int8_t chamber_mask, float target_value,
+                            int16_t target_raw, int16_t token);
+void acceptFireCommand(int8_t chamber_mask_override, int16_t token);
+void rejectPneumaticCommand();
+float selectSourcePressureForMode(int8_t mode);
+void applyRegulatedModeOutputs(int8_t mode, float error, bool delivery_open, int8_t chamber_mask,
+                               int *pwm_main, int *pwm_aux);
+void applyVentOutputs(int8_t chamber_mask);
+uint16_t composePneumaticFlags() ;
+void publishTelemetry(int pwm_main, int pwm_aux);
+void applyLegacyDirectControl();
+int16_t encodePressureDeciKpa(float value_kpa);
 
 void fatal_error_loop(int code) {
   stopActuators();
@@ -189,6 +273,7 @@ void fatal_error_loop(int code) {
     delay(1500);
   }
 }
+
 #define RCCHECK(fn)                                                                                \
   {                                                                                                \
     rcl_ret_t temp_rc = fn;                                                                        \
@@ -197,8 +282,6 @@ void fatal_error_loop(int code) {
     }                                                                                              \
   }
 
-// Count transient publish failures without halting control execution.
-uint32_t publish_soft_failures = 0;
 #define RCSOFTCHECK(fn)                                                                             \
   {                                                                                                 \
     rcl_ret_t temp_rc = fn;                                                                         \
@@ -206,15 +289,9 @@ uint32_t publish_soft_failures = 0;
       publish_soft_failures++;                                                                      \
     }                                                                                               \
   }
-void applyInflateControl(float error, int *pwm_main, int *pwm_aux);
-void applySuctionControl(float error, int *pwm_main, int *pwm_aux);
-void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
-                                    int16_t *active_aux);
-void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode);
-int16_t encodePressureDeciKpa(float value_kpa);
 
 // ==========================================
-// FUNCIONES
+// 6. HELPERS
 // ==========================================
 float readPressureChannel(uint8_t channel) {
   int16_t adc = ads.readADC_SingleEnded(channel);
@@ -233,6 +310,28 @@ int16_t encodePressureDeciKpa(float value_kpa) {
   return (int16_t)scaled;
 }
 
+bool isSuctionMode(int8_t mode) {
+  return mode == MODE_PID_SUCTION || mode == MODE_PWM_SUCTION;
+}
+
+bool isPwmMode(int8_t mode) {
+  return mode == MODE_PWM_INFLATE || mode == MODE_PWM_SUCTION;
+}
+
+bool isPidMode(int8_t mode) {
+  return mode == MODE_PID_INFLATE || mode == MODE_PID_SUCTION;
+}
+
+float decodeTargetValue(int8_t mode, int16_t raw_value) {
+  if (isPidMode(mode)) {
+    return ((float)raw_value) / 10.0f;
+  }
+  if (isPwmMode(mode)) {
+    return (float)constrain((int)raw_value, 0, 255);
+  }
+  return 0.0f;
+}
+
 void stopActuators() {
   const size_t pump_count = sizeof(DIAG_PUMP_OUTPUTS) / sizeof(DIAG_PUMP_OUTPUTS[0]);
   for (size_t idx = 0; idx < pump_count; idx++) {
@@ -243,6 +342,124 @@ void stopActuators() {
   for (size_t idx = 0; idx < digital_count; idx++) {
     digitalWrite(DIAG_DIGITAL_OUTPUTS[idx].pin, LOW);
   }
+}
+
+void resetIntegrators() {
+  integral_pos_sum = 0.0f;
+  integral_neg_sum = 0.0f;
+}
+
+void clearArmedCommand() {
+  armed_command_valid = false;
+  armed_command.valid = false;
+  armed_command.mode = MODE_STOP;
+  armed_command.behavior = PNEUMATIC_BEHAVIOR_ARM;
+  armed_command.requested_chamber_mask = 0;
+  armed_command.applied_chamber_mask = 0;
+  armed_command.target_value = 0.0f;
+  armed_command.target_encoded = 0;
+  armed_command.token = 0;
+  armed_command.legacy_input = false;
+}
+
+void enterPneumaticState(int8_t new_state) {
+  pneumatic_state = new_state;
+  pneumatic_state_entered_ms = millis();
+  pneumatic_ready_since_ms = 0;
+}
+
+void clearTransientPneumaticLatches() {
+  pneumatic_timeout_latched = false;
+  pneumatic_command_rejected_latched = false;
+}
+
+void rejectPneumaticCommand() {
+  pneumatic_command_rejected_latched = true;
+}
+
+void exitHardwareDiagnosticModeIfNeeded(int8_t next_mode) {
+  if (control_mode == MODE_HARDWARE_DIAGNOSTIC && next_mode != MODE_HARDWARE_DIAGNOSTIC) {
+    hardware_test_mask = 0;
+    stopActuators();
+  }
+}
+
+void updateCurrentCommandContext(int8_t mode, int8_t behavior, int8_t chamber_mask,
+                                 float target_value, int16_t target_raw, int16_t token,
+                                 bool legacy_input) {
+  if (mode != control_mode) {
+    resetIntegrators();
+  }
+  current_command.mode = mode;
+  current_command.behavior = behavior;
+  current_command.requested_chamber_mask = chamber_mask & CHAMBER_MASK_ALL;
+  current_command.applied_chamber_mask = 0;
+  current_command.target_value = target_value;
+  current_command.target_encoded = target_raw;
+  current_command.token = token;
+  current_command.legacy_input = legacy_input;
+  current_command.valid = true;
+
+  control_mode = mode;
+  setpoint_pressure = target_value;
+  active_chamber = current_command.requested_chamber_mask;
+}
+
+void acceptDirectCommand(int8_t mode, int8_t chamber_mask, float target_value, int16_t target_raw,
+                         int16_t token, bool legacy_input) {
+  exitHardwareDiagnosticModeIfNeeded(mode);
+  clearTransientPneumaticLatches();
+  clearArmedCommand();
+  updateCurrentCommandContext(mode, PNEUMATIC_BEHAVIOR_DIRECT, chamber_mask, target_value,
+                              target_raw, token, legacy_input);
+
+  if (mode == MODE_STOP) {
+    enterPneumaticState(PNEUMATIC_STATE_IDLE);
+  } else if (mode == MODE_VENT) {
+    enterPneumaticState(PNEUMATIC_STATE_VENT);
+  } else {
+    enterPneumaticState(PNEUMATIC_STATE_DIRECT);
+  }
+}
+
+void acceptPrechargeCommand(int8_t mode, int8_t behavior, int8_t chamber_mask, float target_value,
+                            int16_t target_raw, int16_t token) {
+  if (!isPidMode(mode)) {
+    rejectPneumaticCommand();
+    return;
+  }
+  if (behavior == PNEUMATIC_BEHAVIOR_AUTO && chamber_mask == 0) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  exitHardwareDiagnosticModeIfNeeded(mode);
+  clearTransientPneumaticLatches();
+  clearArmedCommand();
+  updateCurrentCommandContext(mode, behavior, chamber_mask, target_value, target_raw, token, false);
+  enterPneumaticState(PNEUMATIC_STATE_PRECHARGE);
+}
+
+void acceptFireCommand(int8_t chamber_mask_override, int16_t token) {
+  if (!armed_command_valid || pneumatic_state != PNEUMATIC_STATE_READY_HOLD) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  int8_t resolved_chamber = chamber_mask_override & CHAMBER_MASK_ALL;
+  if (resolved_chamber == 0) {
+    resolved_chamber = armed_command.requested_chamber_mask & CHAMBER_MASK_ALL;
+  }
+  if (resolved_chamber == 0) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  clearTransientPneumaticLatches();
+  updateCurrentCommandContext(armed_command.mode, PNEUMATIC_BEHAVIOR_FIRE, resolved_chamber,
+                              armed_command.target_value, armed_command.target_encoded, token,
+                              false);
+  enterPneumaticState(PNEUMATIC_STATE_DELIVER);
 }
 
 void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active_main,
@@ -275,18 +492,14 @@ void applyHardwareDiagnosticOutputs(uint16_t mask, int pwm_diag, int16_t *active
 }
 
 void applyChamberSelectionMask(int8_t chamber_mask, bool vent_mode) {
-  int8_t normalized = chamber_mask & 0x07;
+  int8_t normalized = chamber_mask & CHAMBER_MASK_ALL;
   if (vent_mode && normalized == 0) {
-    normalized = 0x07; // Vent all chambers when command asks for blocked chamber in VENT mode.
+    normalized = CHAMBER_MASK_ALL;
   }
 
-  const bool chamber_a_enabled = (normalized & 0x01) != 0;
-  const bool chamber_b_enabled = (normalized & 0x02) != 0;
-  const bool chamber_c_enabled = (normalized & 0x04) != 0;
-
-  digitalWrite(PIN_MUX_CHAMBER_A, chamber_a_enabled ? HIGH : LOW);
-  digitalWrite(PIN_MUX_CHAMBER_B, chamber_b_enabled ? HIGH : LOW);
-  digitalWrite(PIN_VALVE_CHAMBER_C, chamber_c_enabled ? HIGH : LOW);
+  digitalWrite(PIN_MUX_CHAMBER_A, (normalized & 0x01) ? HIGH : LOW);
+  digitalWrite(PIN_MUX_CHAMBER_B, (normalized & 0x02) ? HIGH : LOW);
+  digitalWrite(PIN_VALVE_CHAMBER_C, (normalized & 0x04) ? HIGH : LOW);
 }
 
 void triggerEmergencyStop() {
@@ -301,8 +514,17 @@ void triggerEmergencyStop() {
   digitalWrite(PIN_MUX_CHAMBER_B, HIGH);
   delay(2000);
   stopActuators();
+  clearArmedCommand();
   emergency_stop_active = true;
-  control_mode = 0;
+  control_mode = MODE_STOP;
+  setpoint_pressure = 0.0f;
+  current_command.valid = false;
+  current_command.mode = MODE_STOP;
+  current_command.requested_chamber_mask = 0;
+  current_command.applied_chamber_mask = 0;
+  current_command.target_value = 0.0f;
+  current_command.target_encoded = 0;
+  enterPneumaticState(PNEUMATIC_STATE_FAULT);
 }
 
 int computePIOutput(float error, float *integral_sum, float kp, float ki, int pwm_limit) {
@@ -355,177 +577,118 @@ int computePIOutput(float error, float *integral_sum, float kp, float ki, int pw
 
 void applyInflateControl(float error, int *pwm_main, int *pwm_aux) {
   *pwm_main = computePIOutput(error, &integral_pos_sum, Kp_pos, Ki_pos, PI_PWM_MAX_INFLATE);
-  if (*pwm_main > THRESHOLD_AUX_ENABLE) {
-    *pwm_aux = *pwm_main;
-  } else {
-    *pwm_aux = 0;
-  }
+  *pwm_aux = (*pwm_main > THRESHOLD_AUX_ENABLE) ? *pwm_main : 0;
 }
 
 void applySuctionControl(float error, int *pwm_main, int *pwm_aux) {
   *pwm_main = computePIOutput(error, &integral_neg_sum, Kp_neg, Ki_neg, PI_PWM_MAX_SUCTION);
-  if (*pwm_main > THRESHOLD_AUX_ENABLE) {
-    *pwm_aux = *pwm_main;
-  } else {
-    *pwm_aux = 0;
-  }
+  *pwm_aux = (*pwm_main > THRESHOLD_AUX_ENABLE) ? *pwm_main : 0;
 }
 
-// ==========================================
-// CALLBACKS
-// ==========================================
-void cb_setpoint(const void *msgin) {
-  if (!emergency_stop_active)
-    setpoint_pressure = ((const std_msgs__msg__Float32 *)msgin)->data;
-}
-void cb_chamber(const void *msgin) {
-  if (!emergency_stop_active) {
-    int8_t requested = ((const std_msgs__msg__Int8 *)msgin)->data;
-    if (requested < 0) {
-      requested = 0;
-    }
-    active_chamber = requested & 0x07;
-  }
+float selectSourcePressureForMode(int8_t mode) {
+  return isSuctionMode(mode) ? sensor_vacuum_ch1_kpa : sensor_pressure_ch0_kpa;
 }
 
-void cb_mode(const void *msgin) {
-  int8_t m = ((const std_msgs__msg__Int8 *)msgin)->data;
-  if (emergency_stop_active && m == MODE_STOP)
-    emergency_stop_active = false;
-  if (emergency_stop_active)
-    return;
+void applyRegulatedModeOutputs(int8_t mode, float error, bool delivery_open, int8_t chamber_mask,
+                               int *pwm_main, int *pwm_aux) {
+  *pwm_main = 0;
+  *pwm_aux = 0;
+  applyChamberSelectionMask(delivery_open ? chamber_mask : 0, false);
 
-  bool mode_changed = (m != control_mode);
-
-  if (mode_changed) {
-    integral_pos_sum = 0;
-    integral_neg_sum = 0;
-  }
-
-  if (mode_changed && control_mode == MODE_HARDWARE_DIAGNOSTIC) {
-    hardware_test_mask = 0;
-    stopActuators();
-  }
-
-  control_mode = m;
-}
-
-void cb_tuning(const void *msgin) {
-  const std_msgs__msg__Float32MultiArray *msg = (const std_msgs__msg__Float32MultiArray *)msgin;
-  if (msg->data.size >= 6) {
-    Kp_pos = msg->data.data[0];
-    Ki_pos = msg->data.data[1];
-    Kp_neg = msg->data.data[2];
-    Ki_neg = msg->data.data[3];
-    safety_limit_max = msg->data.data[4];
-    safety_limit_min = msg->data.data[5];
-    integral_pos_sum = 0;
-    integral_neg_sum = 0;
-  }
-}
-
-void cb_hwtest(const void *msgin) {
-  if (emergency_stop_active) {
-    hardware_test_mask = 0;
+  if (mode == MODE_PID_INFLATE) {
+    digitalWrite(PIN_VALVE_INFLATE, delivery_open ? HIGH : LOW);
+    digitalWrite(PIN_VALVE_SUCTION, LOW);
+    ledcWrite(CH_SUCCION_MAIN, 0);
+    ledcWrite(CH_SUCCION_AUX, 0);
+    applyInflateControl(error, pwm_main, pwm_aux);
+    ledcWrite(CH_INFLATE_MAIN, *pwm_main);
+    ledcWrite(CH_INFLATE_AUX, *pwm_aux);
     return;
   }
-  hardware_test_mask = (uint16_t)((const std_msgs__msg__Int16 *)msgin)->data;
-}
 
-// ==========================================
-// LOOP DE CONTROL
-// ==========================================
-void controlLoop() {
-  sensor_pressure_ch0_kpa = readPressureChannel(0);
-  sensor_vacuum_ch1_kpa = readPressureChannel(1);
+  if (mode == MODE_PID_SUCTION) {
+    digitalWrite(PIN_VALVE_INFLATE, LOW);
+    digitalWrite(PIN_VALVE_SUCTION, delivery_open ? HIGH : LOW);
+    ledcWrite(CH_INFLATE_MAIN, 0);
+    ledcWrite(CH_INFLATE_AUX, 0);
+    applySuctionControl(error, pwm_main, pwm_aux);
+    ledcWrite(CH_SUCCION_MAIN, *pwm_main);
+    ledcWrite(CH_SUCCION_AUX, *pwm_aux);
+    return;
+  }
 
-  const bool suction_mode = (control_mode == MODE_PID_SUCTION || control_mode == MODE_PWM_SUCTION);
-  current_pressure = suction_mode ? sensor_vacuum_ch1_kpa : sensor_pressure_ch0_kpa;
+  if (mode == MODE_PWM_INFLATE || mode == MODE_PWM_SUCTION) {
+    *pwm_main = constrain((int)setpoint_pressure, 0, 255);
+    *pwm_aux = (*pwm_main > THRESHOLD_AUX_ENABLE) ? *pwm_main : 0;
 
-  float error = setpoint_pressure - current_pressure;
-  int pwm_main = 0;
-  int pwm_aux = 0;
-
-  if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
-    int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
-    int16_t active_main = 0;
-    int16_t active_aux = 0;
-    applyHardwareDiagnosticOutputs(hardware_test_mask, pwm_diag, &active_main, &active_aux);
-    pwm_main = (int)active_main;
-    pwm_aux = (int)active_aux;
-  } else {
-    if (current_pressure > safety_limit_max || current_pressure < safety_limit_min) {
-      triggerEmergencyStop();
-    }
-
-    if (!emergency_stop_active) {
-      applyChamberSelectionMask(active_chamber, control_mode == MODE_VENT);
-
-      if (control_mode == MODE_VENT) { // VENTEAR (liberar presion a atmosfera)
-        // Bombas apagadas
-        ledcWrite(CH_INFLATE_MAIN, 0);
-        ledcWrite(CH_INFLATE_AUX, 0);
-        ledcWrite(CH_SUCCION_MAIN, 0);
-        ledcWrite(CH_SUCCION_AUX, 0);
-
-        // Válvulas desenergizadas (A->R abierto / P cerrado)
-        digitalWrite(PIN_VALVE_INFLATE, LOW);
-        digitalWrite(PIN_VALVE_SUCTION, LOW);
-      } else if (control_mode == MODE_STOP || (active_chamber == 0 && control_mode != MODE_VENT)) {
-        stopActuators();
-        integral_pos_sum = 0;
-        integral_neg_sum = 0;
-      } else if (control_mode == MODE_PID_INFLATE) { // INFLAR PI PURO
-        digitalWrite(PIN_VALVE_INFLATE, HIGH);
-        digitalWrite(PIN_VALVE_SUCTION, LOW);
-        ledcWrite(CH_SUCCION_MAIN, 0);
-        ledcWrite(CH_SUCCION_AUX, 0);
-        applyInflateControl(error, &pwm_main, &pwm_aux);
-        ledcWrite(CH_INFLATE_MAIN, pwm_main);
-        ledcWrite(CH_INFLATE_AUX, pwm_aux);
-      } else if (control_mode == MODE_PID_SUCTION) { // SUCCIONAR PI PURO
-        ledcWrite(CH_INFLATE_MAIN, 0);
-        ledcWrite(CH_INFLATE_AUX, 0);
-
-        digitalWrite(PIN_VALVE_INFLATE, LOW);
-        digitalWrite(PIN_VALVE_SUCTION, HIGH);
-        applySuctionControl(error, &pwm_main, &pwm_aux);
-        ledcWrite(CH_SUCCION_MAIN, pwm_main);
-        ledcWrite(CH_SUCCION_AUX, pwm_aux);
-      }
-      // MODOS MANUALES
-      else if (control_mode == MODE_PWM_INFLATE || control_mode == MODE_PWM_SUCTION) {
-        pwm_main = constrain((int)setpoint_pressure, 0, 255);
-
-        // Espejo Directo en Manual
-        if (pwm_main > THRESHOLD_AUX_ENABLE)
-          pwm_aux = pwm_main;
-        else
-          pwm_aux = 0;
-
-        if (control_mode == MODE_PWM_INFLATE) { // Inflar
-          digitalWrite(PIN_VALVE_INFLATE, HIGH);
-          digitalWrite(PIN_VALVE_SUCTION, LOW);
-          ledcWrite(CH_SUCCION_MAIN, 0);
-          ledcWrite(CH_SUCCION_AUX, 0);
-          ledcWrite(CH_INFLATE_MAIN, pwm_main);
-          ledcWrite(CH_INFLATE_AUX, pwm_aux);
-        } else { // Succión
-          digitalWrite(PIN_VALVE_INFLATE, LOW);
-          digitalWrite(PIN_VALVE_SUCTION, HIGH);
-          ledcWrite(CH_INFLATE_MAIN, 0);
-          ledcWrite(CH_INFLATE_AUX, 0);
-          ledcWrite(CH_SUCCION_MAIN, pwm_main);
-          ledcWrite(CH_SUCCION_AUX, pwm_aux);
-        }
-      }
+    if (mode == MODE_PWM_INFLATE) {
+      digitalWrite(PIN_VALVE_INFLATE, delivery_open ? HIGH : LOW);
+      digitalWrite(PIN_VALVE_SUCTION, LOW);
+      ledcWrite(CH_SUCCION_MAIN, 0);
+      ledcWrite(CH_SUCCION_AUX, 0);
+      ledcWrite(CH_INFLATE_MAIN, *pwm_main);
+      ledcWrite(CH_INFLATE_AUX, *pwm_aux);
     } else {
-      pwm_main = 0;
-      pwm_aux = 0;
-      error = 0.0f;
+      digitalWrite(PIN_VALVE_INFLATE, LOW);
+      digitalWrite(PIN_VALVE_SUCTION, delivery_open ? HIGH : LOW);
+      ledcWrite(CH_INFLATE_MAIN, 0);
+      ledcWrite(CH_INFLATE_AUX, 0);
+      ledcWrite(CH_SUCCION_MAIN, *pwm_main);
+      ledcWrite(CH_SUCCION_AUX, *pwm_aux);
     }
+    return;
   }
 
+  stopActuators();
+}
+
+void applyVentOutputs(int8_t chamber_mask) {
+  ledcWrite(CH_INFLATE_MAIN, 0);
+  ledcWrite(CH_INFLATE_AUX, 0);
+  ledcWrite(CH_SUCCION_MAIN, 0);
+  ledcWrite(CH_SUCCION_AUX, 0);
+  applyChamberSelectionMask(chamber_mask, true);
+  digitalWrite(PIN_VALVE_INFLATE, LOW);
+  digitalWrite(PIN_VALVE_SUCTION, LOW);
+}
+
+uint16_t composePneumaticFlags() {
+  uint16_t flags = 0;
+
+  if (pneumatic_state == PNEUMATIC_STATE_READY_HOLD) {
+    flags |= PNEUMATIC_FLAG_READY;
+  }
+  if (armed_command_valid || pneumatic_state == PNEUMATIC_STATE_READY_HOLD) {
+    flags |= PNEUMATIC_FLAG_ARMED;
+  }
+  if (pneumatic_state == PNEUMATIC_STATE_DIRECT || pneumatic_state == PNEUMATIC_STATE_DELIVER) {
+    flags |= PNEUMATIC_FLAG_DELIVERING;
+  }
+  if (pneumatic_timeout_latched) {
+    flags |= PNEUMATIC_FLAG_TIMEOUT;
+  }
+  if (pneumatic_command_rejected_latched) {
+    flags |= PNEUMATIC_FLAG_COMMAND_REJECTED;
+  }
+  if (emergency_stop_active) {
+    flags |= PNEUMATIC_FLAG_EMERGENCY_STOP;
+  }
+  if (current_command.legacy_input) {
+    flags |= PNEUMATIC_FLAG_LEGACY_INPUT;
+  }
+  return flags;
+}
+
+void applyLegacyDirectControl() {
+  if (legacy_requested_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    return;
+  }
+  acceptDirectCommand(legacy_requested_mode, legacy_requested_chamber, legacy_requested_setpoint,
+                      encodePressureDeciKpa(legacy_requested_setpoint), 0, true);
+}
+
+void publishTelemetry(int pwm_main, int pwm_aux) {
+  const uint16_t pneumatic_flags = composePneumaticFlags();
   uint16_t status_flags = 0;
   if (emergency_stop_active) {
     status_flags |= STATUS_FLAG_EMERGENCY_STOP;
@@ -546,6 +709,19 @@ void controlLoop() {
   msg_debug.data.data = debug_data;
   msg_debug.data.size = 6;
 
+  pneumatic_state_data[0] = PNEUMATIC_PROTOCOL_VERSION;
+  pneumatic_state_data[1] = (int16_t)pneumatic_state;
+  pneumatic_state_data[2] = (int16_t)current_command.mode;
+  pneumatic_state_data[3] = (int16_t)current_command.behavior;
+  pneumatic_state_data[4] = (int16_t)(current_command.requested_chamber_mask & CHAMBER_MASK_ALL);
+  pneumatic_state_data[5] = (int16_t)(current_command.applied_chamber_mask & CHAMBER_MASK_ALL);
+  pneumatic_state_data[6] = (int16_t)pneumatic_flags;
+  pneumatic_state_data[7] = (int16_t)current_command.target_encoded;
+  pneumatic_state_data[8] = encodePressureDeciKpa(selectSourcePressureForMode(current_command.mode));
+  pneumatic_state_data[9] = (int16_t)current_command.token;
+  msg_pneumatic_state.data.data = pneumatic_state_data;
+  msg_pneumatic_state.data.size = PNEUMATIC_STATE_LENGTH;
+
   const unsigned long now = millis();
   if (now - last_telemetry_timestamp >= TELEMETRY_PERIOD_MS) {
     last_telemetry_timestamp = now;
@@ -554,19 +730,274 @@ void controlLoop() {
     RCSOFTCHECK(rcl_publish(&pub_sensor_pressure, &msg_sensor_pressure, NULL));
     RCSOFTCHECK(rcl_publish(&pub_sensor_vacuum, &msg_sensor_vacuum, NULL));
     RCSOFTCHECK(rcl_publish(&pub_debug, &msg_debug, NULL));
+    RCSOFTCHECK(rcl_publish(&pub_pneumatic_state, &msg_pneumatic_state, NULL));
   }
 }
 
 // ==========================================
-// SETUP
+// 7. CALLBACKS
+// ==========================================
+void cb_setpoint(const void *msgin) {
+  if (emergency_stop_active) {
+    return;
+  }
+  legacy_requested_setpoint = ((const std_msgs__msg__Float32 *)msgin)->data;
+  applyLegacyDirectControl();
+}
+
+void cb_chamber(const void *msgin) {
+  if (emergency_stop_active) {
+    return;
+  }
+  int8_t requested = ((const std_msgs__msg__Int8 *)msgin)->data;
+  if (requested < 0) {
+    requested = 0;
+  }
+  legacy_requested_chamber = requested & CHAMBER_MASK_ALL;
+  applyLegacyDirectControl();
+}
+
+void cb_mode(const void *msgin) {
+  int8_t mode = ((const std_msgs__msg__Int8 *)msgin)->data;
+
+  if (emergency_stop_active && mode == MODE_STOP) {
+    emergency_stop_active = false;
+    clearTransientPneumaticLatches();
+  }
+  if (emergency_stop_active) {
+    return;
+  }
+
+  if (mode == MODE_HARDWARE_DIAGNOSTIC) {
+    if (control_mode != MODE_HARDWARE_DIAGNOSTIC) {
+      resetIntegrators();
+      clearArmedCommand();
+      current_command.mode = MODE_HARDWARE_DIAGNOSTIC;
+      current_command.behavior = PNEUMATIC_BEHAVIOR_DIRECT;
+      current_command.requested_chamber_mask = 0;
+      current_command.applied_chamber_mask = 0;
+      current_command.target_value = 0.0f;
+      current_command.target_encoded = 0;
+      current_command.token = 0;
+      current_command.legacy_input = true;
+      current_command.valid = true;
+      control_mode = MODE_HARDWARE_DIAGNOSTIC;
+      enterPneumaticState(PNEUMATIC_STATE_IDLE);
+    }
+    legacy_requested_mode = mode;
+    return;
+  }
+
+  legacy_requested_mode = mode;
+  applyLegacyDirectControl();
+}
+
+void cb_tuning(const void *msgin) {
+  const std_msgs__msg__Float32MultiArray *msg = (const std_msgs__msg__Float32MultiArray *)msgin;
+  if (msg->data.size >= 6) {
+    Kp_pos = msg->data.data[0];
+    Ki_pos = msg->data.data[1];
+    Kp_neg = msg->data.data[2];
+    Ki_neg = msg->data.data[3];
+    safety_limit_max = msg->data.data[4];
+    safety_limit_min = msg->data.data[5];
+    resetIntegrators();
+  }
+}
+
+void cb_hwtest(const void *msgin) {
+  if (emergency_stop_active) {
+    hardware_test_mask = 0;
+    return;
+  }
+  hardware_test_mask = (uint16_t)((const std_msgs__msg__Int16 *)msgin)->data;
+}
+
+void cb_pneumatic_command(const void *msgin) {
+  const std_msgs__msg__Int16MultiArray *msg = (const std_msgs__msg__Int16MultiArray *)msgin;
+  if (msg->data.size < PNEUMATIC_COMMAND_LENGTH) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  const int16_t version = msg->data.data[0];
+  const int8_t mode = (int8_t)msg->data.data[1];
+  const int8_t chamber_mask = (int8_t)(msg->data.data[2] & CHAMBER_MASK_ALL);
+  const int8_t behavior = (int8_t)msg->data.data[3];
+  const int16_t target_raw = (int16_t)msg->data.data[4];
+  const int16_t token = (int16_t)msg->data.data[5];
+
+  if (version != PNEUMATIC_PROTOCOL_VERSION) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  if (emergency_stop_active && mode == MODE_STOP) {
+    emergency_stop_active = false;
+    clearTransientPneumaticLatches();
+  }
+  if (emergency_stop_active) {
+    return;
+  }
+
+  if (behavior == PNEUMATIC_BEHAVIOR_FIRE) {
+    acceptFireCommand(chamber_mask, token);
+    return;
+  }
+
+  if (mode == MODE_HARDWARE_DIAGNOSTIC) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  if (behavior == PNEUMATIC_BEHAVIOR_AUTO || behavior == PNEUMATIC_BEHAVIOR_ARM) {
+    acceptPrechargeCommand(mode, behavior, chamber_mask, decodeTargetValue(mode, target_raw),
+                           target_raw, token);
+    return;
+  }
+
+  if (behavior != PNEUMATIC_BEHAVIOR_DIRECT) {
+    rejectPneumaticCommand();
+    return;
+  }
+
+  acceptDirectCommand(mode, chamber_mask, decodeTargetValue(mode, target_raw), target_raw, token,
+                      false);
+}
+
+// ==========================================
+// 8. LOOP DE CONTROL
+// ==========================================
+void controlLoop() {
+  sensor_pressure_ch0_kpa = readPressureChannel(0);
+  sensor_vacuum_ch1_kpa = readPressureChannel(1);
+
+  float source_pressure = selectSourcePressureForMode(current_command.mode);
+  current_pressure = source_pressure;
+  float error = setpoint_pressure - current_pressure;
+  int pwm_main = 0;
+  int pwm_aux = 0;
+
+  if (control_mode == MODE_HARDWARE_DIAGNOSTIC) {
+    int pwm_diag = constrain((int)setpoint_pressure, 0, 255);
+    int16_t active_main = 0;
+    int16_t active_aux = 0;
+    applyHardwareDiagnosticOutputs(hardware_test_mask, pwm_diag, &active_main, &active_aux);
+    pwm_main = (int)active_main;
+    pwm_aux = (int)active_aux;
+    publishTelemetry(pwm_main, pwm_aux);
+    return;
+  }
+
+  if (source_pressure > safety_limit_max || source_pressure < safety_limit_min) {
+    triggerEmergencyStop();
+  }
+
+  if (emergency_stop_active) {
+    pwm_main = 0;
+    pwm_aux = 0;
+    current_command.applied_chamber_mask = 0;
+    publishTelemetry(pwm_main, pwm_aux);
+    return;
+  }
+
+  const unsigned long now = millis();
+  switch (pneumatic_state) {
+  case PNEUMATIC_STATE_IDLE:
+    stopActuators();
+    current_command.applied_chamber_mask = 0;
+    break;
+
+  case PNEUMATIC_STATE_DIRECT:
+    if (current_command.mode == MODE_STOP ||
+        (current_command.requested_chamber_mask == 0 && current_command.mode != MODE_VENT)) {
+      stopActuators();
+      current_command.applied_chamber_mask = 0;
+      resetIntegrators();
+    } else {
+      current_command.applied_chamber_mask = current_command.requested_chamber_mask;
+      applyRegulatedModeOutputs(current_command.mode, error, true,
+                                current_command.requested_chamber_mask, &pwm_main, &pwm_aux);
+    }
+    break;
+
+  case PNEUMATIC_STATE_PRECHARGE:
+    current_command.applied_chamber_mask = 0;
+    applyRegulatedModeOutputs(current_command.mode, error, false, 0, &pwm_main, &pwm_aux);
+
+    if (fabsf(error) <= READY_BAND_KPA) {
+      if (pneumatic_ready_since_ms == 0) {
+        pneumatic_ready_since_ms = now;
+      }
+      if ((now - pneumatic_ready_since_ms) >= READY_HOLD_MS) {
+        if (current_command.behavior == PNEUMATIC_BEHAVIOR_AUTO) {
+          current_command.applied_chamber_mask = current_command.requested_chamber_mask;
+          enterPneumaticState(PNEUMATIC_STATE_DELIVER);
+        } else {
+          armed_command = current_command;
+          armed_command_valid = true;
+          armed_command.behavior = PNEUMATIC_BEHAVIOR_ARM;
+          armed_command.applied_chamber_mask = 0;
+          enterPneumaticState(PNEUMATIC_STATE_READY_HOLD);
+        }
+      }
+    } else {
+      pneumatic_ready_since_ms = 0;
+    }
+
+    if ((now - pneumatic_state_entered_ms) >= PRECHARGE_TIMEOUT_MS) {
+      pneumatic_timeout_latched = true;
+      stopActuators();
+      current_command.applied_chamber_mask = 0;
+      enterPneumaticState(PNEUMATIC_STATE_FAULT);
+    }
+    break;
+
+  case PNEUMATIC_STATE_READY_HOLD:
+    current_command = armed_command_valid ? armed_command : current_command;
+    current_command.applied_chamber_mask = 0;
+    applyRegulatedModeOutputs(current_command.mode, error, false, 0, &pwm_main, &pwm_aux);
+    if (fabsf(error) > READY_RECHARGE_BAND_KPA) {
+      pneumatic_ready_since_ms = 0;
+    }
+    break;
+
+  case PNEUMATIC_STATE_DELIVER:
+    current_command.applied_chamber_mask = current_command.requested_chamber_mask;
+    applyRegulatedModeOutputs(current_command.mode, error, true,
+                              current_command.requested_chamber_mask, &pwm_main, &pwm_aux);
+    break;
+
+  case PNEUMATIC_STATE_VENT:
+    current_command.applied_chamber_mask =
+        (current_command.requested_chamber_mask == 0) ? CHAMBER_MASK_ALL
+                                                      : current_command.requested_chamber_mask;
+    applyVentOutputs(current_command.requested_chamber_mask);
+    break;
+
+  case PNEUMATIC_STATE_FAULT:
+  default:
+    stopActuators();
+    current_command.applied_chamber_mask = 0;
+    pwm_main = 0;
+    pwm_aux = 0;
+    break;
+  }
+
+  publishTelemetry(pwm_main, pwm_aux);
+}
+
+// ==========================================
+// 9. SETUP / LOOP
 // ==========================================
 void setup() {
   Serial.begin(115200);
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  if (!ads.begin()) { /* Error */
+  if (!ads.begin()) {
+    fatal_error_loop(2);
   }
   ads.setGain(GAIN_ONE);
-  ads.setDataRate(RATE_ADS1115_860SPS); // Max speed to prevent I2C blocks from starving ROS
+  ads.setDataRate(RATE_ADS1115_860SPS);
 
   const size_t digital_count = sizeof(DIAG_DIGITAL_OUTPUTS) / sizeof(DIAG_DIGITAL_OUTPUTS[0]);
   for (size_t idx = 0; idx < digital_count; idx++) {
@@ -581,6 +1012,8 @@ void setup() {
   }
 
   stopActuators();
+  clearArmedCommand();
+  enterPneumaticState(PNEUMATIC_STATE_IDLE);
 
   set_microros_transports();
   allocator = rcl_get_default_allocator();
@@ -599,6 +1032,9 @@ void setup() {
       "tuning_params"));
   RCCHECK(rclc_subscription_init_default(
       &sub_hwtest, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16), "hardware_test"));
+  RCCHECK(rclc_subscription_init_default(
+      &sub_pneumatic_command, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16MultiArray),
+      "pneumatic_command"));
 
   RCCHECK(rclc_publisher_init_default(&pub_sensor_pressure, &node,
                                       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
@@ -609,21 +1045,32 @@ void setup() {
   RCCHECK(rclc_publisher_init_default(&pub_debug, &node,
                                       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16MultiArray),
                                       "system_debug"));
+  RCCHECK(rclc_publisher_init_default(
+      &pub_pneumatic_state, &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16MultiArray), "pneumatic_state"));
 
   msg_debug.data.capacity = 6;
   msg_debug.data.size = 6;
   msg_debug.data.data = debug_data;
+
   msg_tuning.data.capacity = 6;
   msg_tuning.data.size = 6;
   msg_tuning.data.data = tuning_buffer;
 
-  // 6. Initialize message buffers to safe values
-  msg_mode.data = 0;
+  msg_pneumatic_command.data.capacity = PNEUMATIC_COMMAND_LENGTH;
+  msg_pneumatic_command.data.size = PNEUMATIC_COMMAND_LENGTH;
+  msg_pneumatic_command.data.data = pneumatic_command_buffer;
+
+  msg_pneumatic_state.data.capacity = PNEUMATIC_STATE_LENGTH;
+  msg_pneumatic_state.data.size = PNEUMATIC_STATE_LENGTH;
+  msg_pneumatic_state.data.data = pneumatic_state_data;
+
+  msg_mode.data = MODE_STOP;
   msg_setpoint.data = 0.0f;
   msg_chamber.data = 0;
   msg_hwtest.data = 0;
 
-  RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
+  RCCHECK(rclc_executor_init(&executor, &support.context, 6, &allocator));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_setpoint, &msg_setpoint, &cb_setpoint,
                                          ON_NEW_DATA));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_mode, &msg_mode, &cb_mode, ON_NEW_DATA));
@@ -633,6 +1080,8 @@ void setup() {
       rclc_executor_add_subscription(&executor, &sub_tuning, &msg_tuning, &cb_tuning, ON_NEW_DATA));
   RCCHECK(rclc_executor_add_subscription(&executor, &sub_hwtest, &msg_hwtest, &cb_hwtest,
                                          ON_NEW_DATA));
+  RCCHECK(rclc_executor_add_subscription(&executor, &sub_pneumatic_command,
+                                         &msg_pneumatic_command, &cb_pneumatic_command, ON_NEW_DATA));
 
   last_control_timestamp = millis();
   last_telemetry_timestamp = millis() - TELEMETRY_PERIOD_MS;
